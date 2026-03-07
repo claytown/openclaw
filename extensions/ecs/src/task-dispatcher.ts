@@ -7,6 +7,7 @@ import type { SubagentRunResult } from "openclaw/plugin-sdk/ecs";
 import type { EcsApiCallback } from "./api-callback.js";
 import type { EcsDiscordChannels } from "./discord-channels.js";
 import { setActivePersona } from "./persona-registry.js";
+import { loadPersonaBootstrapFiles } from "./persona.js";
 import type { EcsTaskTracker } from "./task-tracker.js";
 import type { EcsTask, EcsTaskAck } from "./types.js";
 
@@ -25,6 +26,18 @@ export type TaskDispatcherDeps = {
   callback: EcsApiCallback;
   subagent: SubagentRunner;
 };
+
+/**
+ * Load persona bootstrap files and format them into a system prompt section.
+ * Falls back to a bare label when the persona directory has no files.
+ */
+export async function buildPersonaSystemPrompt(personaName: string): Promise<string> {
+  const files = await loadPersonaBootstrapFiles(personaName);
+  if (files.length === 0) return `Active persona: ${personaName}`;
+
+  const sections = files.map((f) => `## ${f.name}\n\n${f.content.trim()}`);
+  return `# Persona: ${personaName}\n\n${sections.join("\n\n---\n\n")}`;
+}
 
 /**
  * Build the structured prompt for a spawned ECS agent.
@@ -87,10 +100,14 @@ export async function dispatchEcsTask(
   const sessionKey = `${agentId}-ecs-${task.taskId}`;
 
   try {
+    const extraSystemPrompt = task.persona
+      ? await buildPersonaSystemPrompt(task.persona)
+      : undefined;
+
     const result = await deps.subagent.run({
       sessionKey,
       message: prompt,
-      extraSystemPrompt: task.persona ? `Active persona: ${task.persona}` : undefined,
+      extraSystemPrompt,
       deliver: false, // headless, no external delivery
     });
 

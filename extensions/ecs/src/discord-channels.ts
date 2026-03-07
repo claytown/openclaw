@@ -48,6 +48,7 @@ export class EcsDiscordChannels {
   private channels: EcsDiscordConfig["channels"];
   private guildId: string;
   private channelIdSet: Set<string>;
+  private ecsThreadIds = new Set<string>();
   private onPostCallback?: (info: EcsPostInfo) => void;
 
   constructor(token: string, config: EcsDiscordConfig) {
@@ -64,9 +65,9 @@ export class EcsDiscordChannels {
     return this.channelIdSet;
   }
 
-  /** Check if a channel/thread ID is one of the ECS channels. */
+  /** Check if a channel/thread ID is one of the ECS channels (or a known ECS thread). */
   isEcsChannel(id: string): boolean {
-    return this.channelIdSet.has(id);
+    return this.channelIdSet.has(id) || this.ecsThreadIds.has(id);
   }
 
   /** Register a callback that fires after every successful post. */
@@ -173,6 +174,7 @@ export class EcsDiscordChannels {
       const thread = (await this.rest.post(Routes.threads(this.channels.info, result.messageId), {
         body: { name: threadName, auto_archive_duration: 1440 },
       })) as { id: string };
+      this.ecsThreadIds.add(thread.id);
       return { ...result, threadId: thread.id };
     } catch {
       // Thread creation failed; return without threadId.
