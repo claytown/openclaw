@@ -8,6 +8,7 @@ import type { EcsQuestion, EcsQuestionAnswer } from "./types.js";
 
 export type PendingQuestion = {
   question: EcsQuestion;
+  projectId?: string;
   resolve: (answer: EcsQuestionAnswer | null) => void;
   timeout: ReturnType<typeof setTimeout>;
   threadId: string;
@@ -44,7 +45,11 @@ export class EcsQuestionRelay {
    * Register a pending question and return a Promise that blocks until answered or timed out.
    * The caller should post the question to Discord first and pass the threadId.
    */
-  registerPendingQuestion(question: EcsQuestion, threadId: string): Promise<QuestionResult> {
+  registerPendingQuestion(
+    question: EcsQuestion,
+    threadId: string,
+    projectId?: string,
+  ): Promise<QuestionResult> {
     return new Promise<QuestionResult>((resolve) => {
       const timeoutMs = question.timeoutMs ?? this.defaultTimeoutMs;
 
@@ -54,7 +59,7 @@ export class EcsQuestionRelay {
 
         let escalated = false;
         if (this.escalateOnTimeout) {
-          await this.discord.postQuestionTimeout(question);
+          await this.discord.postQuestionTimeout(question, projectId);
           escalated = true;
         }
 
@@ -67,6 +72,7 @@ export class EcsQuestionRelay {
 
       const entry: PendingQuestion = {
         question,
+        projectId,
         resolve: (qAnswer) => {
           clearTimeout(timeout);
           this.pending.delete(threadId);

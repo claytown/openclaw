@@ -8,6 +8,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { EcsApiConfig } from "./config.js";
+import type { ProjectChannelManager } from "./project-channel-manager.js";
 import { dispatchEcsTask, type TaskDispatcherDeps } from "./task-dispatcher.js";
 import type { EcsTaskTracker } from "./task-tracker.js";
 import type { EcsTask } from "./types.js";
@@ -37,8 +38,17 @@ async function readBody(req: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-function parsePathParams(url: string): { route: string; taskId?: string } {
-  // Expected paths: /ecs/tasks, /ecs/tasks/:taskId/status, /ecs/tasks/:taskId/cancel
+function parsePathParams(url: string): { route: string; taskId?: string; projectId?: string } {
+  // /ecs/projects — list projects
+  if (url === "/ecs/projects") {
+    return { route: "projects" };
+  }
+  // /ecs/projects/:projectId/archive — archive project channels
+  const projMatch = url.match(/^\/ecs\/projects\/([^/]+)\/archive$/);
+  if (projMatch) {
+    return { route: "project-archive", projectId: projMatch[1] };
+  }
+  // /ecs/tasks, /ecs/tasks/:taskId/status, /ecs/tasks/:taskId/cancel
   const match = url.match(/^\/ecs\/tasks(?:\/([^/]+)(?:\/(status|cancel))?)?$/);
   if (!match) {
     return { route: "unknown" };
@@ -52,6 +62,7 @@ function parsePathParams(url: string): { route: string; taskId?: string } {
 export type EcsApiHandlerDeps = TaskDispatcherDeps & {
   tracker: EcsTaskTracker;
   apiConfig: EcsApiConfig;
+  projectManager?: ProjectChannelManager;
 };
 
 export function createEcsApiHandler(deps: EcsApiHandlerDeps) {
@@ -69,7 +80,7 @@ export function createEcsApiHandler(deps: EcsApiHandlerDeps) {
       }
     }
 
-    const { route, taskId } = parsePathParams(url);
+    const { route, taskId, projectId } = parsePathParams(url);
 
     if (route === "tasks" && method === "POST") {
       await handleAssignTask(req, res, deps);
@@ -77,6 +88,10 @@ export function createEcsApiHandler(deps: EcsApiHandlerDeps) {
       handleGetStatus(res, deps.tracker, taskId);
     } else if (route === "cancel" && taskId && method === "POST") {
       await handleCancelTask(res, deps, taskId);
+    } else if (route === "projects" && method === "GET") {
+      handleListProjects(res, deps);
+    } else if (route === "project-archive" && projectId && method === "POST") {
+      await handleArchiveProject(res, deps, projectId);
     } else {
       sendJson(res, 404, { error: "Not found" });
     }
@@ -118,6 +133,7 @@ async function handleAssignTask(
   const task: EcsTask = {
     taskId,
     epicId: typeof body.epicId === "string" ? body.epicId : undefined,
+    projectId: typeof body.projectId === "string" ? body.projectId : undefined,
     title,
     description,
     assignedAgentId: typeof body.assignedAgentId === "string" ? body.assignedAgentId : undefined,
@@ -175,15 +191,43 @@ async function handleCancelTask(
   await deps.callback.reportError(taskId, "Task cancelled via API");
 
   // Echo to Discord.
-  await deps.discord.postTaskCompleted({
-    taskId,
-    agentId: active.agentId,
-    status: "cancelled",
-    summary: "Task was cancelled via API.",
-    durationMs: Date.now() - active.startedAt,
-  });
+  await deps.discord.postTaskCompleted(
+    {
+      taskId,
+      agentId: active.agentId,
+      status: "cancelled",
+      summary: "Task was cancelled via API.",
+      durationMs: Date.now() - active.startedAt,
+    },
+    active.task.projectId,
+  );
 
   sendJson(res, 200, { taskId, status: "cancelled" });
+}
+
+function handleListProjects(res: ServerResponse, deps: EcsApiHandlerDeps): void {
+  if (!deps.projectManager) {
+    sendJson(res, 200, { projects: [] });
+    return;
+  }
+  sendJson(res, 200, { projects: deps.projectManager.listProjects() });
+}
+
+async function handleArchiveProject(
+  res: ServerResponse,
+  deps: EcsApiHandlerDeps,
+  projectId: string,
+): Promise<void> {
+  if (!deps.projectManager) {
+    sendJson(res, 404, { error: "Project channel management not enabled" });
+    return;
+  }
+  const archived = await deps.projectManager.archiveProject(projectId);
+  if (!archived) {
+    sendJson(res, 404, { error: "Project not found", projectId });
+    return;
+  }
+  sendJson(res, 200, { projectId, archived: true });
 }
 
 function isValidPriority(v: unknown): v is "low" | "medium" | "high" | "critical" {

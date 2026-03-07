@@ -9,6 +9,7 @@ export type EcsIssueSeverity = "warn" | "error" | "critical";
 export type EcsTask = {
   taskId: string;
   epicId?: string;
+  projectId?: string;
   title: string;
   description: string;
   assignedAgentId?: string;
