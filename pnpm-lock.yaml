@@ -307,6 +307,18 @@ importers:
 
   extensions/discord: {}
 
+  extensions/ecs:
+    dependencies:
+      '@buape/carbon':
+        specifier: 0.0.0-beta-20260216184201
+        version: 0.0.0-beta-20260216184201(@discordjs/opus@0.10.0)(hono@4.12.5)(opusscript@0.1.1)
+      '@sinclair/typebox':
+        specifier: 0.34.48
+        version: 0.34.48
+      discord-api-types:
+        specifier: ^0.38.41
+        version: 0.38.41
+
   extensions/feishu:
     dependencies:
       '@larksuiteoapi/node-sdk':
@@ -4131,9 +4143,6 @@ packages:
 
   discord-api-types@0.38.37:
     resolution: {integrity: sha512-Cv47jzY1jkGkh5sv0bfHYqGgKOWO1peOrGMkDFM4UmaGMOTgOW8QSexhvixa9sVOiz8MnVOBryWYyw/CEVhj7w==}
-
-  discord-api-types@0.38.40:
-    resolution: {integrity: sha512-P/His8cotqZgQqrt+hzrocp9L8RhQQz1GkrCnC9TMJ8Uw2q0tg8YyqJyGULxhXn/8kxHETN4IppmOv+P2m82lQ==}
 
   discord-api-types@0.38.41:
     resolution: {integrity: sha512-yMECyR8j9c2fVTvCQ+Qc24pweYFIZk/XoxDOmt1UvPeSw5tK6gXBd/2hhP+FEAe9Y6ny8pRMaf618XDK4U53OQ==}
@@ -11053,8 +11062,6 @@ snapshots:
 
   discord-api-types@0.38.37: {}
 
-  discord-api-types@0.38.40: {}
-
   discord-api-types@0.38.41: {}
 
   doctypes@1.1.0: {}
@@ -12529,7 +12536,7 @@ snapshots:
       cli-highlight: 2.1.11
       commander: 14.0.3
       croner: 10.0.1
-      discord-api-types: 0.38.40
+      discord-api-types: 0.38.41
       dotenv: 17.3.1
       express: 5.2.1
       file-type: 21.3.0
