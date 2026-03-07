@@ -101,6 +101,48 @@ function createMockApi(pluginConfig: Record<string, unknown>): {
   return { api, hooks, tools, httpRoutes };
 }
 
+describe("extractDiscordId (via message hooks)", () => {
+  it("message_received hook strips channel: prefix and forwards ECS messages", async () => {
+    const { api, hooks } = createMockApi(makeEcsPluginConfig());
+    ecsPlugin.register(api);
+
+    const hook = hooks.find((h) => h.hookName === "message_received");
+    expect(hook).toBeDefined();
+
+    // With "channel:" prefix — should match ch-info and forward.
+    await hook!.handler(
+      { content: "test msg", from: "user" } as never,
+      { channelId: "discord", conversationId: "channel:ch-info" } as never,
+    );
+    // No crash = prefix was stripped correctly.
+  });
+
+  it("message_sent hook strips channel: prefix", async () => {
+    const { api, hooks } = createMockApi(makeEcsPluginConfig());
+    ecsPlugin.register(api);
+
+    const hook = hooks.find((h) => h.hookName === "message_sent");
+    expect(hook).toBeDefined();
+
+    await hook!.handler(
+      { content: "reply", success: true } as never,
+      { channelId: "discord", conversationId: "channel:ch-status" } as never,
+    );
+  });
+
+  it("message_received handles raw IDs without prefix", async () => {
+    const { api, hooks } = createMockApi(makeEcsPluginConfig());
+    ecsPlugin.register(api);
+
+    const hook = hooks.find((h) => h.hookName === "message_received");
+
+    await hook!.handler(
+      { content: "raw msg", from: "user" } as never,
+      { channelId: "discord", conversationId: "ch-info" } as never,
+    );
+  });
+});
+
 describe("ECS plugin registration", () => {
   it("does not register anything when not enabled", () => {
     const { api, hooks, tools, httpRoutes } = createMockApi({ enabled: false });

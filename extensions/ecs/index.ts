@@ -22,6 +22,13 @@ import {
   type EcsToolDeps,
 } from "./src/tools.js";
 
+/** Extract raw Discord ID from conversationId (strips "channel:" / "user:" prefix). */
+function extractDiscordId(conversationId: string | undefined): string | undefined {
+  if (!conversationId) return undefined;
+  const colonIdx = conversationId.indexOf(":");
+  return colonIdx >= 0 ? conversationId.slice(colonIdx + 1) : conversationId;
+}
+
 /** Normalize a Discord bot token (strip env-var prefix, trim whitespace). */
 function normalizeDiscordToken(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
@@ -169,20 +176,24 @@ const ecsPlugin = {
     api.on(
       "message_received",
       async (event, ctx) => {
-        const threadId = ctx.conversationId;
-        if (!threadId || !event.content) return;
+        const rawId = extractDiscordId(ctx.conversationId);
+        if (!rawId || !event.content) return;
 
-        if (questionRelay.hasPending(threadId)) {
+        log.info(
+          `[ecs] message_received: conversationId=${ctx.conversationId} rawId=${rawId} from=${event.from} isEcs=${discord.isEcsChannel(rawId)} hasPending=${questionRelay.hasPending(rawId)}`,
+        );
+
+        if (questionRelay.hasPending(rawId)) {
           const answeredBy = event.from ?? "unknown";
-          questionRelay.resolveQuestion(threadId, event.content, answeredBy);
-          log.info(`[ecs] question in thread ${threadId} answered by ${answeredBy}`);
+          questionRelay.resolveQuestion(rawId, event.content, answeredBy);
+          log.info(`[ecs] question in thread ${rawId} answered by ${answeredBy}`);
         }
 
         // Forward ECS-channel messages to the control plane.
-        if (discord.isEcsChannel(threadId)) {
+        if (discord.isEcsChannel(rawId)) {
           void callback
             .reportMessage({
-              channel_id: threadId,
+              channel_id: rawId,
               direction: "inbound",
               author: event.from,
               content: event.content,
@@ -197,11 +208,12 @@ const ecsPlugin = {
     api.on(
       "message_sent",
       async (event, ctx) => {
-        if (!ctx.conversationId || !event.success) return;
-        if (discord.isEcsChannel(ctx.conversationId)) {
+        const rawId = extractDiscordId(ctx.conversationId);
+        if (!rawId || !event.success) return;
+        if (discord.isEcsChannel(rawId)) {
           void callback
             .reportMessage({
-              channel_id: ctx.conversationId,
+              channel_id: rawId,
               direction: "outbound",
               content: event.content,
             })
