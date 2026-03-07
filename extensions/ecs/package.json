@@ -1,0 +1,17 @@
+{
+  "name": "@openclaw/ecs",
+  "version": "2026.3.7",
+  "private": true,
+  "description": "OpenClaw ECS (Execution Control System) — inter-agent task orchestration via Discord",
+  "type": "module",
+  "dependencies": {
+    "@buape/carbon": "0.0.0-beta-20260216184201",
+    "@sinclair/typebox": "0.34.48",
+    "discord-api-types": "^0.38.41"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

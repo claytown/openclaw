@@ -570,6 +570,18 @@
       "default": "./dist/plugin-sdk/zalouser.js"
     },
     "./extension-api": "./dist/extensionAPI.js",
+    "./plugin-sdk/account-id": {
+      "types": "./dist/plugin-sdk/account-id.d.ts",
+      "default": "./dist/plugin-sdk/account-id.js"
+    },
+    "./plugin-sdk/keyed-async-queue": {
+      "types": "./dist/plugin-sdk/keyed-async-queue.d.ts",
+      "default": "./dist/plugin-sdk/keyed-async-queue.js"
+    },
+    "./plugin-sdk/ecs": {
+      "types": "./dist/plugin-sdk/ecs.d.ts",
+      "default": "./dist/plugin-sdk/ecs.js"
+    },
     "./cli-entry": "./openclaw.mjs"
   },
   "scripts": {
