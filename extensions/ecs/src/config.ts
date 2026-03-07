@@ -14,6 +14,10 @@ export type EcsDiscordConfig = {
   guildId: string;
   /** Channel IDs for the three intent channels. */
   channels: EcsDiscordChannelsConfig;
+  /** Pre-mapped project IDs to existing channel IDs (skip auto-creation). */
+  projectChannels?: Record<string, EcsDiscordChannelsConfig>;
+  /** Max projects with auto-created channels. Default: 100. */
+  maxProjectChannels?: number;
 };
 
 export type EcsApiConfig = {

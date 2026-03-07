@@ -104,7 +104,7 @@ export function createEcsStatusUpdateTool(deps: EcsToolDeps, ctx: EcsToolContext
 
       // Post to Discord and callback to ECS (fire-and-forget).
       const [discordResult] = await Promise.all([
-        deps.discord.postStatusUpdate(update),
+        deps.discord.postStatusUpdate(update, active?.task.projectId),
         deps.callback.reportStatus(taskId, summary, {
           sessionId: ctx.sessionKey,
           agentId: ctx.agentId,
@@ -149,7 +149,7 @@ export function createEcsAskQuestionTool(deps: EcsToolDeps, ctx: EcsToolContext)
       };
 
       // Post question to Discord and create thread.
-      const discordResult = await deps.discord.postQuestion(question);
+      const discordResult = await deps.discord.postQuestion(question, active?.task.projectId);
       const threadId = discordResult.threadId;
 
       if (!threadId) {
@@ -162,7 +162,11 @@ export function createEcsAskQuestionTool(deps: EcsToolDeps, ctx: EcsToolContext)
       }
 
       // Block on the question relay promise.
-      const result = await deps.questionRelay.registerPendingQuestion(question, threadId);
+      const result = await deps.questionRelay.registerPendingQuestion(
+        question,
+        threadId,
+        active?.task.projectId,
+      );
 
       return jsonResult(result);
     },
@@ -201,7 +205,7 @@ export function createEcsRaiseIssueTool(deps: EcsToolDeps, ctx: EcsToolContext):
         needsHuman: severity === "critical",
       };
 
-      const discordResult = await deps.discord.postIssue(issue);
+      const discordResult = await deps.discord.postIssue(issue, active?.task.projectId);
 
       return jsonResult({
         posted: true,

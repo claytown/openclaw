@@ -5,7 +5,8 @@
 
 import { RequestClient } from "@buape/carbon";
 import { Routes } from "discord-api-types/v10";
-import type { EcsDiscordConfig } from "./config.js";
+import type { EcsDiscordChannelsConfig, EcsDiscordConfig } from "./config.js";
+import type { ProjectChannelManager } from "./project-channel-manager.js";
 import type {
   EcsIssue,
   EcsIssueSeverity,
@@ -50,24 +51,33 @@ export class EcsDiscordChannels {
   private channelIdSet: Set<string>;
   private ecsThreadIds = new Set<string>();
   private onPostCallback?: (info: EcsPostInfo) => void;
+  private projectManager?: ProjectChannelManager;
 
-  constructor(token: string, config: EcsDiscordConfig) {
+  constructor(token: string, config: EcsDiscordConfig, projectManager?: ProjectChannelManager) {
     this.rest = new RequestClient(token);
     this.channels = config.channels;
     this.guildId = config.guildId;
     this.channelIdSet = new Set(
       [config.channels.status, config.channels.info, config.channels.issues].filter(Boolean),
     );
+    this.projectManager = projectManager;
   }
 
-  /** Returns the set of ECS channel IDs. */
+  /** Returns the set of ECS channel IDs (default + all project channels). */
   getChannelIds(): Set<string> {
-    return this.channelIdSet;
+    if (!this.projectManager) return this.channelIdSet;
+    const all = new Set(this.channelIdSet);
+    for (const id of this.projectManager.getProjectChannelIds()) {
+      all.add(id);
+    }
+    return all;
   }
 
   /** Check if a channel/thread ID is one of the ECS channels (or a known ECS thread). */
   isEcsChannel(id: string): boolean {
-    return this.channelIdSet.has(id) || this.ecsThreadIds.has(id);
+    if (this.channelIdSet.has(id) || this.ecsThreadIds.has(id)) return true;
+    if (this.projectManager) return this.projectManager.getProjectChannelIds().has(id);
+    return false;
   }
 
   /** Register a callback that fires after every successful post. */
@@ -75,8 +85,15 @@ export class EcsDiscordChannels {
     this.onPostCallback = cb;
   }
 
+  /** Resolve channel set for a project (or fall back to defaults). */
+  private async resolveChannels(projectId?: string): Promise<EcsDiscordChannelsConfig> {
+    if (!projectId || !this.projectManager) return this.channels;
+    return this.projectManager.resolveChannels(projectId);
+  }
+
   /** Post a task assignment notification to #ecs-status. */
   async postTaskAssigned(task: EcsTask): Promise<DiscordPostResult> {
+    const ch = await this.resolveChannels(task.projectId);
     const embed = {
       title: `Task Assigned: ${task.title}`,
       description: truncate(task.description, 1000),
@@ -87,15 +104,17 @@ export class EcsDiscordChannels {
         ...(task.assignedAgentId
           ? [{ name: "Agent", value: task.assignedAgentId, inline: true }]
           : []),
+        ...(task.projectId ? [{ name: "Project", value: task.projectId, inline: true }] : []),
       ],
       timestamp: new Date().toISOString(),
     };
 
-    return this.postEmbed(this.channels.status, embed);
+    return this.postEmbed(ch.status, embed);
   }
 
   /** Post a status update to #ecs-status. */
-  async postStatusUpdate(update: EcsStatusUpdate): Promise<DiscordPostResult> {
+  async postStatusUpdate(update: EcsStatusUpdate, projectId?: string): Promise<DiscordPostResult> {
+    const ch = await this.resolveChannels(projectId);
     const fields = [
       { name: "Task ID", value: update.taskId, inline: true },
       { name: "Status", value: update.status, inline: true },
@@ -115,11 +134,15 @@ export class EcsDiscordChannels {
       timestamp: new Date(update.timestamp).toISOString(),
     };
 
-    return this.postEmbed(this.channels.status, embed);
+    return this.postEmbed(ch.status, embed);
   }
 
   /** Post a task completion to #ecs-status. */
-  async postTaskCompleted(completion: EcsTaskCompletion): Promise<DiscordPostResult> {
+  async postTaskCompleted(
+    completion: EcsTaskCompletion,
+    projectId?: string,
+  ): Promise<DiscordPostResult> {
+    const ch = await this.resolveChannels(projectId);
     const isError = completion.status === "error" || completion.status === "cancelled";
     const embed = {
       title: `Task ${completion.status === "complete" ? "Completed" : completion.status === "error" ? "Failed" : "Cancelled"}`,
@@ -133,7 +156,7 @@ export class EcsDiscordChannels {
       timestamp: new Date().toISOString(),
     };
 
-    const result = await this.postEmbed(this.channels.status, embed);
+    const result = await this.postEmbed(ch.status, embed);
 
     // Also post a summary to the task's Discord thread if available.
     if (completion.threadId) {
@@ -148,7 +171,8 @@ export class EcsDiscordChannels {
   }
 
   /** Post a question to #ecs-info and create a thread for discussion. */
-  async postQuestion(question: EcsQuestion): Promise<DiscordPostResult> {
+  async postQuestion(question: EcsQuestion, projectId?: string): Promise<DiscordPostResult> {
+    const ch = await this.resolveChannels(projectId);
     const embed = {
       title: "Question",
       description: truncate(question.question, 1000),
@@ -163,7 +187,7 @@ export class EcsDiscordChannels {
     };
 
     // Post the embed to #ecs-info.
-    const result = await this.postEmbed(this.channels.info, embed);
+    const result = await this.postEmbed(ch.info, embed);
     if (!result.messageId) {
       return result;
     }
@@ -171,7 +195,7 @@ export class EcsDiscordChannels {
     // Create a thread on the message for discussion.
     try {
       const threadName = `Q: ${truncate(question.question, 80)}`;
-      const thread = (await this.rest.post(Routes.threads(this.channels.info, result.messageId), {
+      const thread = (await this.rest.post(Routes.threads(ch.info, result.messageId), {
         body: { name: threadName, auto_archive_duration: 1440 },
       })) as { id: string };
       this.ecsThreadIds.add(thread.id);
@@ -183,7 +207,8 @@ export class EcsDiscordChannels {
   }
 
   /** Post an issue to #ecs-issues. */
-  async postIssue(issue: EcsIssue): Promise<DiscordPostResult> {
+  async postIssue(issue: EcsIssue, projectId?: string): Promise<DiscordPostResult> {
+    const ch = await this.resolveChannels(projectId);
     const embed = {
       title: `[${issue.severity.toUpperCase()}] ${issue.title}`,
       description: truncate(issue.description, 1000),
@@ -199,11 +224,12 @@ export class EcsDiscordChannels {
       timestamp: new Date().toISOString(),
     };
 
-    return this.postEmbed(this.channels.issues, embed);
+    return this.postEmbed(ch.issues, embed);
   }
 
   /** Post a timeout escalation to #ecs-issues when a question goes unanswered. */
-  async postQuestionTimeout(question: EcsQuestion): Promise<DiscordPostResult> {
+  async postQuestionTimeout(question: EcsQuestion, projectId?: string): Promise<DiscordPostResult> {
+    const ch = await this.resolveChannels(projectId);
     const embed = {
       title: "[WARN] Unanswered Question Escalation",
       description: `Question timed out and was auto-escalated.\n\n**Question:** ${truncate(question.question, 800)}`,
@@ -218,7 +244,7 @@ export class EcsDiscordChannels {
       timestamp: new Date().toISOString(),
     };
 
-    return this.postEmbed(this.channels.issues, embed);
+    return this.postEmbed(ch.issues, embed);
   }
 
   /** Post a message to a specific thread (e.g., for answers to questions). */

@@ -6,12 +6,14 @@
  * back to an ECS control plane.
  */
 
+import { RequestClient } from "@buape/carbon";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/ecs";
 import { EcsApiCallback } from "./src/api-callback.js";
 import { createEcsApiHandler } from "./src/api-handler.js";
 import { resolveEcsAgentsConfig, type EcsConfig } from "./src/config.js";
 import { EcsDiscordChannels } from "./src/discord-channels.js";
 import { clearActivePersona } from "./src/persona-registry.js";
+import { ProjectChannelManager } from "./src/project-channel-manager.js";
 import { EcsQuestionRelay } from "./src/question-relay.js";
 import { EcsTaskTracker } from "./src/task-tracker.js";
 import {
@@ -88,10 +90,28 @@ const ecsPlugin = {
     // Initialize modules.
     const tracker = new EcsTaskTracker();
     const callback = new EcsApiCallback(pluginCfg.controlPlane ?? {});
-    const discord = new EcsDiscordChannels(
-      discordToken ?? "",
-      pluginCfg.discord ?? { guildId: "", channels: { status: "", info: "", issues: "" } },
-    );
+    const discordCfg = pluginCfg.discord ?? {
+      guildId: "",
+      channels: { status: "", info: "", issues: "" },
+    };
+
+    // Project channel manager: auto-provisions per-project Discord categories.
+    let projectManager: ProjectChannelManager | undefined;
+    if (discordToken && discordCfg.guildId) {
+      projectManager = new ProjectChannelManager(
+        new RequestClient(discordToken),
+        discordCfg.guildId,
+        discordCfg.channels,
+        {
+          maxProjects: discordCfg.maxProjectChannels,
+          projectChannels: discordCfg.projectChannels,
+          log: (msg) => log.info(msg),
+        },
+      );
+      projectManager.load();
+    }
+
+    const discord = new EcsDiscordChannels(discordToken ?? "", discordCfg, projectManager);
     const agentsConfig = resolveEcsAgentsConfig(pluginCfg.agents);
     const questionRelay = new EcsQuestionRelay({
       discord,
@@ -106,6 +126,7 @@ const ecsPlugin = {
       callback,
       subagent: api.runtime.subagent,
       apiConfig: pluginCfg.api ?? {},
+      projectManager,
     });
 
     api.registerHttpRoute({
@@ -156,14 +177,17 @@ const ecsPlugin = {
           await callback.reportCompleted(taskId, summary, { sessionId: sessionKey });
         }
 
-        await discord.postTaskCompleted({
-          taskId,
-          agentId: active.agentId,
-          status: isError ? "error" : "complete",
-          summary,
-          durationMs: Date.now() - active.startedAt,
-          threadId: active.discordThreadId,
-        });
+        await discord.postTaskCompleted(
+          {
+            taskId,
+            agentId: active.agentId,
+            status: isError ? "error" : "complete",
+            summary,
+            durationMs: Date.now() - active.startedAt,
+            threadId: active.discordThreadId,
+          },
+          active.task.projectId,
+        );
 
         tracker.remove(taskId);
         clearActivePersona(sessionKey);
