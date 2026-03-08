@@ -158,6 +158,7 @@ async function handleAssignTask(
         ? (body.metadata as Record<string, unknown>)
         : undefined,
     persona: typeof body.persona === "string" ? body.persona : undefined,
+    idempotencyKey: typeof body.idempotencyKey === "string" ? body.idempotencyKey : undefined,
   };
 
   const ack = await dispatchEcsTask(task, deps, {
