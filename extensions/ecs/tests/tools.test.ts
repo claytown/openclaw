@@ -16,6 +16,7 @@ const mocks = {
   reportStatus: vi.fn().mockResolvedValue({ ok: true }),
   reportCompleted: vi.fn().mockResolvedValue({ ok: true }),
   reportError: vi.fn().mockResolvedValue({ ok: true }),
+  reportQuestion: vi.fn().mockResolvedValue({ ok: true }),
   registerPendingQuestion: vi.fn().mockResolvedValue({
     answer: "42",
     answeredBy: "human",
@@ -41,6 +42,7 @@ function makeDeps(tracker?: EcsTaskTracker): EcsToolDeps {
       reportStatus: mocks.reportStatus,
       reportCompleted: mocks.reportCompleted,
       reportError: mocks.reportError,
+      reportQuestion: mocks.reportQuestion,
     } as never,
     questionRelay: {
       registerPendingQuestion: mocks.registerPendingQuestion,
@@ -129,6 +131,38 @@ describe("ecs_ask_question", () => {
     expect(parsed.timedOut).toBe(false);
     expect(mocks.postQuestion).toHaveBeenCalled();
     expect(mocks.registerPendingQuestion).toHaveBeenCalled();
+  });
+
+  it("fires reportQuestion callback after Discord post", async () => {
+    const tracker = new EcsTaskTracker();
+    tracker.register(makeTask(), "sess-1");
+    const deps = makeDeps(tracker);
+
+    const tool = createEcsAskQuestionTool(deps, { sessionKey: "sess-1", agentId: "agent-1" });
+    await tool.execute("call-1", { question: "What color is the sky?" });
+
+    expect(mocks.reportQuestion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        question_text: "What color is the sky?",
+        agent_task_id: "task-1",
+        asked_by: "agent-1",
+        discord_thread_id: "thread-1",
+        discord_channel: "info",
+      }),
+    );
+  });
+
+  it("does not block when reportQuestion fails", async () => {
+    const tracker = new EcsTaskTracker();
+    tracker.register(makeTask(), "sess-1");
+    const deps = makeDeps(tracker);
+    mocks.reportQuestion.mockRejectedValue(new Error("network error"));
+
+    const tool = createEcsAskQuestionTool(deps, { sessionKey: "sess-1" });
+    const result = await tool.execute("call-1", { question: "Help?" });
+
+    const parsed = parseResult(result as never) as Record<string, unknown>;
+    expect(parsed.answer).toBe("42");
   });
 
   it("returns error when thread creation fails", async () => {

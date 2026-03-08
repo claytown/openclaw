@@ -121,6 +121,11 @@ export class EcsQuestionRelay {
     return true;
   }
 
+  /** Reverse-lookup: get the Discord thread ID for a given question ID. */
+  getThreadIdByQuestionId(questionId: string): string | undefined {
+    return this.byQuestionId.get(questionId);
+  }
+
   /** Check if a thread ID has a pending question. */
   hasPending(threadId: string): boolean {
     return this.pending.has(threadId);
