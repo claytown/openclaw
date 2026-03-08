@@ -37,11 +37,15 @@ function makeMockRest() {
 function makeManager(opts?: {
   maxProjects?: number;
   projectChannels?: Record<string, EcsDiscordChannelsConfig>;
+  onProjectProvisioned?: (
+    channelSet: import("../src/project-channel-manager.js").ProjectChannelSet,
+  ) => void;
 }) {
   return new ProjectChannelManager(mockRest as never, "guild-1", defaultChannels, {
     persistPath,
     maxProjects: opts?.maxProjects,
     projectChannels: opts?.projectChannels,
+    onProjectProvisioned: opts?.onProjectProvisioned,
     log: () => {},
   });
 }
@@ -279,6 +283,48 @@ describe("ProjectChannelManager", () => {
       const manager = makeManager();
       const result = await manager.archiveProject("nonexistent");
       expect(result).toBe(false);
+    });
+  });
+
+  describe("onProjectProvisioned callback", () => {
+    it("fires after successful provisioning with the correct channel set", async () => {
+      const cb = vi.fn();
+      const manager = makeManager({ onProjectProvisioned: cb });
+      await manager.resolveChannels("alpha");
+
+      expect(cb).toHaveBeenCalledOnce();
+      expect(cb).toHaveBeenCalledWith({
+        projectId: "alpha",
+        categoryId: "ch-1",
+        statusChannelId: "ch-2",
+        infoChannelId: "ch-3",
+        issuesChannelId: "ch-4",
+        createdAt: expect.any(Number),
+      });
+    });
+
+    it("does not fire when provisioning fails", async () => {
+      mockRest.post.mockRejectedValueOnce(new Error("boom"));
+      const cb = vi.fn();
+      const manager = makeManager({ onProjectProvisioned: cb });
+      await manager.resolveChannels("broken");
+
+      expect(cb).not.toHaveBeenCalled();
+    });
+
+    it("provisioning succeeds even if callback throws", async () => {
+      const cb = vi.fn(() => {
+        throw new Error("callback exploded");
+      });
+      const manager = makeManager({ onProjectProvisioned: cb });
+      const result = await manager.resolveChannels("alpha");
+
+      expect(cb).toHaveBeenCalledOnce();
+      expect(result).toEqual({
+        status: "ch-2",
+        info: "ch-3",
+        issues: "ch-4",
+      });
     });
   });
 
