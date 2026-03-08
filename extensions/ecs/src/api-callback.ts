@@ -130,4 +130,19 @@ export class EcsApiCallback {
       agent_id: opts?.agentId,
     });
   }
+
+  async reportQuestion(payload: {
+    question_id: string;
+    agent_task_id: string | null;
+    question_text: string;
+    context: string | null;
+    asked_by: string | null;
+    discord_thread_id: string;
+    discord_channel: string;
+  }): Promise<{ ok: boolean }> {
+    return this.post("/agent_question_callback", {
+      ...payload,
+      event: "question_asked",
+    });
+  }
 }

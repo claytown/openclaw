@@ -161,6 +161,19 @@ export function createEcsAskQuestionTool(deps: EcsToolDeps, ctx: EcsToolContext)
         });
       }
 
+      // Fire-and-forget: notify control plane about the question.
+      deps.callback
+        .reportQuestion({
+          question_id: question.questionId,
+          agent_task_id: question.taskId ?? null,
+          question_text: question.question,
+          context: question.context ?? null,
+          asked_by: question.fromAgentId ?? null,
+          discord_thread_id: threadId,
+          discord_channel: "info",
+        })
+        .catch(() => {});
+
       // Block on the question relay promise.
       const result = await deps.questionRelay.registerPendingQuestion(
         question,

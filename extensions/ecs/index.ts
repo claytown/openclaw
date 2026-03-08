@@ -127,6 +127,7 @@ const ecsPlugin = {
       subagent: api.runtime.subagent,
       apiConfig: pluginCfg.api ?? {},
       projectManager,
+      questionRelay,
     });
 
     api.registerHttpRoute({

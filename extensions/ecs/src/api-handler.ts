@@ -9,6 +9,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { EcsApiConfig } from "./config.js";
 import type { ProjectChannelManager } from "./project-channel-manager.js";
+import type { EcsQuestionRelay } from "./question-relay.js";
 import { dispatchEcsTask, type TaskDispatcherDeps } from "./task-dispatcher.js";
 import type { EcsTaskTracker } from "./task-tracker.js";
 import type { EcsTask } from "./types.js";
@@ -38,7 +39,12 @@ async function readBody(req: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-function parsePathParams(url: string): { route: string; taskId?: string; projectId?: string } {
+function parsePathParams(url: string): {
+  route: string;
+  taskId?: string;
+  projectId?: string;
+  questionId?: string;
+} {
   // /ecs/projects — list projects
   if (url === "/ecs/projects") {
     return { route: "projects" };
@@ -47,6 +53,11 @@ function parsePathParams(url: string): { route: string; taskId?: string; project
   const projMatch = url.match(/^\/ecs\/projects\/([^/]+)\/archive$/);
   if (projMatch) {
     return { route: "project-archive", projectId: projMatch[1] };
+  }
+  // /ecs/questions/:questionId/answer — answer a pending question
+  const questionMatch = url.match(/^\/ecs\/questions\/([^/]+)\/answer$/);
+  if (questionMatch) {
+    return { route: "question-answer", questionId: questionMatch[1] };
   }
   // /ecs/tasks, /ecs/tasks/:taskId/status, /ecs/tasks/:taskId/cancel
   const match = url.match(/^\/ecs\/tasks(?:\/([^/]+)(?:\/(status|cancel))?)?$/);
@@ -63,6 +74,7 @@ export type EcsApiHandlerDeps = TaskDispatcherDeps & {
   tracker: EcsTaskTracker;
   apiConfig: EcsApiConfig;
   projectManager?: ProjectChannelManager;
+  questionRelay?: EcsQuestionRelay;
 };
 
 export function createEcsApiHandler(deps: EcsApiHandlerDeps) {
@@ -80,7 +92,7 @@ export function createEcsApiHandler(deps: EcsApiHandlerDeps) {
       }
     }
 
-    const { route, taskId, projectId } = parsePathParams(url);
+    const { route, taskId, projectId, questionId } = parsePathParams(url);
 
     if (route === "tasks" && method === "POST") {
       await handleAssignTask(req, res, deps);
@@ -92,6 +104,8 @@ export function createEcsApiHandler(deps: EcsApiHandlerDeps) {
       handleListProjects(res, deps);
     } else if (route === "project-archive" && projectId && method === "POST") {
       await handleArchiveProject(res, deps, projectId);
+    } else if (route === "question-answer" && questionId && method === "POST") {
+      await handleAnswerQuestion(req, res, questionId, deps);
     } else {
       sendJson(res, 404, { error: "Not found" });
     }
@@ -228,6 +242,49 @@ async function handleArchiveProject(
     return;
   }
   sendJson(res, 200, { projectId, archived: true });
+}
+
+async function handleAnswerQuestion(
+  req: IncomingMessage,
+  res: ServerResponse,
+  questionId: string,
+  deps: EcsApiHandlerDeps,
+): Promise<void> {
+  if (!deps.questionRelay) {
+    sendJson(res, 404, { error: "Question relay not configured" });
+    return;
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    const raw = await readBody(req);
+    body = JSON.parse(raw);
+  } catch {
+    sendJson(res, 400, { error: "Invalid JSON body" });
+    return;
+  }
+
+  const answerText = typeof body.answer_text === "string" ? body.answer_text : "";
+  const answeredBy = typeof body.answered_by === "string" ? body.answered_by : "api";
+
+  if (!answerText) {
+    sendJson(res, 400, { error: "answer_text is required" });
+    return;
+  }
+
+  const threadId = deps.questionRelay.getThreadIdByQuestionId(questionId);
+  if (!threadId) {
+    sendJson(res, 404, { error: "No pending question with that ID" });
+    return;
+  }
+
+  const resolved = deps.questionRelay.resolveQuestion(threadId, answerText, answeredBy);
+  if (!resolved) {
+    sendJson(res, 404, { error: "Question already resolved or expired" });
+    return;
+  }
+
+  sendJson(res, 200, { questionId, status: "resolved" });
 }
 
 function isValidPriority(v: unknown): v is "low" | "medium" | "high" | "critical" {
