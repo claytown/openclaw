@@ -52,6 +52,7 @@ export class ProjectChannelManager {
   private inflight = new Map<string, Promise<ProjectChannelSet | null>>();
 
   private log: (msg: string) => void;
+  private onProjectProvisioned?: (channelSet: ProjectChannelSet) => void;
 
   constructor(
     rest: RequestClient,
@@ -62,6 +63,7 @@ export class ProjectChannelManager {
       maxProjects?: number;
       projectChannels?: Record<string, EcsDiscordChannelsConfig>;
       log?: (msg: string) => void;
+      onProjectProvisioned?: (channelSet: ProjectChannelSet) => void;
     },
   ) {
     this.rest = rest;
@@ -71,6 +73,7 @@ export class ProjectChannelManager {
     this.maxProjects = opts?.maxProjects ?? DEFAULT_MAX_PROJECTS;
     this.configOverrides = opts?.projectChannels ?? {};
     this.log = opts?.log ?? (() => {});
+    this.onProjectProvisioned = opts?.onProjectProvisioned;
   }
 
   /** Load persisted project-channel mappings from disk. */
@@ -173,6 +176,11 @@ export class ProjectChannelManager {
 
       this.projects.set(projectId, channelSet);
       this.persist();
+      try {
+        this.onProjectProvisioned?.(channelSet);
+      } catch (cbErr) {
+        this.log(`[ecs] onProjectProvisioned callback error: ${cbErr}`);
+      }
 
       this.log(
         `[ecs] provisioned Discord channels for project "${projectId}" (category ${category.id})`,

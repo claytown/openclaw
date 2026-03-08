@@ -106,6 +106,17 @@ const ecsPlugin = {
           maxProjects: discordCfg.maxProjectChannels,
           projectChannels: discordCfg.projectChannels,
           log: (msg) => log.info(msg),
+          onProjectProvisioned: (channelSet) => {
+            void callback
+              .reportProjectChannels({
+                project_id: channelSet.projectId,
+                category_id: channelSet.categoryId,
+                status_channel_id: channelSet.statusChannelId,
+                info_channel_id: channelSet.infoChannelId,
+                issues_channel_id: channelSet.issuesChannelId,
+              })
+              .catch((err) => log.warn(`[ecs] project channels callback failed: ${err}`));
+          },
         },
       );
       projectManager.load();
