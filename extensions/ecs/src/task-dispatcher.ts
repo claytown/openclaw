@@ -17,6 +17,7 @@ export type SubagentRunner = {
     message: string;
     extraSystemPrompt?: string;
     deliver?: boolean;
+    idempotencyKey?: string;
   }) => Promise<SubagentRunResult>;
 };
 
@@ -109,6 +110,7 @@ export async function dispatchEcsTask(
       message: prompt,
       extraSystemPrompt,
       deliver: false, // headless, no external delivery
+      idempotencyKey: task.idempotencyKey,
     });
 
     // Register in tracker.

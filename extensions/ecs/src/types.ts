@@ -18,6 +18,7 @@ export type EcsTask = {
   deadline?: string;
   metadata?: Record<string, unknown>;
   persona?: string;
+  idempotencyKey?: string;
 };
 
 export type EcsTaskAck = {
