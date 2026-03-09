@@ -265,12 +265,16 @@ export class EcsDiscordChannels {
   }
 
   /** Post a lightweight system-level event to #ecs-status (zero token cost). */
-  async postSystemEvent(params: {
-    title: string;
-    description?: string;
-    color?: number;
-    fields?: { name: string; value: string; inline?: boolean }[];
-  }): Promise<DiscordPostResult> {
+  async postSystemEvent(
+    params: {
+      title: string;
+      description?: string;
+      color?: number;
+      fields?: { name: string; value: string; inline?: boolean }[];
+    },
+    projectId?: string,
+  ): Promise<DiscordPostResult> {
+    const ch = await this.resolveChannels(projectId);
     const embed = {
       title: params.title,
       description: params.description,
@@ -278,7 +282,7 @@ export class EcsDiscordChannels {
       fields: params.fields,
       timestamp: new Date().toISOString(),
     };
-    return this.postEmbed(this.channels.status, embed);
+    return this.postEmbed(ch.status, embed);
   }
 
   private async postEmbed(

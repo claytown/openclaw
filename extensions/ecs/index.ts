@@ -291,15 +291,18 @@ const ecsPlugin = {
         const ecsTask = tracker.getBySessionKey(event.childSessionKey);
         // Only post for ECS-managed tasks (not random subagents).
         if (!ecsTask) return;
-        await discord.postSystemEvent({
-          title: "Agent Session Started",
-          color: 0x3498db, // blue
-          fields: [
-            { name: "Task", value: ecsTask.task.title, inline: true },
-            { name: "Agent", value: event.agentId, inline: true },
-            { name: "Mode", value: event.mode, inline: true },
-          ],
-        });
+        await discord.postSystemEvent(
+          {
+            title: "Agent Session Started",
+            color: 0x3498db, // blue
+            fields: [
+              { name: "Task", value: ecsTask.task.title, inline: true },
+              { name: "Agent", value: event.agentId, inline: true },
+              { name: "Mode", value: event.mode, inline: true },
+            ],
+          },
+          ecsTask.task.projectId,
+        );
       },
       { priority: 200 },
     );
