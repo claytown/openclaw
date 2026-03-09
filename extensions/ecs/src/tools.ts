@@ -87,14 +87,22 @@ export function createEcsStatusUpdateTool(deps: EcsToolDeps, ctx: EcsToolContext
       const active = ctx.sessionKey ? deps.tracker.getBySessionKey(ctx.sessionKey) : undefined;
       const taskId = active?.task.taskId ?? "unknown";
 
+      // Debug: trace project routing.
+      console.log(
+        `[ecs] status_update: sessionKey=${ctx.sessionKey} taskId=${taskId} projectId=${active?.task.projectId ?? "NONE"} trackerSize=${deps.tracker.size()}`,
+      );
+
       // Update tracker.
       if (active) {
         deps.tracker.updateStatus(taskId, status);
       }
 
+      // Prefer tracker's agentId (the ECS agent) over ctx.agentId (gateway context).
+      const resolvedAgentId = active?.agentId ?? ctx.agentId;
+
       const update: EcsStatusUpdate = {
         taskId,
-        agentId: ctx.agentId ?? active?.agentId,
+        agentId: resolvedAgentId,
         status,
         progressPct,
         summary,
@@ -105,10 +113,20 @@ export function createEcsStatusUpdateTool(deps: EcsToolDeps, ctx: EcsToolContext
       // Post to Discord and callback to ECS (fire-and-forget).
       const [discordResult] = await Promise.all([
         deps.discord.postStatusUpdate(update, active?.task.projectId),
-        deps.callback.reportStatus(taskId, summary, {
-          sessionId: ctx.sessionKey,
-          agentId: ctx.agentId,
-        }),
+        status === "complete"
+          ? deps.callback.reportCompleted(taskId, summary, {
+              sessionId: ctx.sessionKey,
+              agentId: resolvedAgentId,
+            })
+          : status === "error"
+            ? deps.callback.reportError(taskId, summary, {
+                sessionId: ctx.sessionKey,
+                agentId: resolvedAgentId,
+              })
+            : deps.callback.reportStatus(taskId, summary, {
+                sessionId: ctx.sessionKey,
+                agentId: resolvedAgentId,
+              }),
       ]);
 
       return jsonResult({

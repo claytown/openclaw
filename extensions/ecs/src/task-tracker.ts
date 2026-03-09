@@ -2,6 +2,16 @@
 
 import type { EcsActiveTask, EcsTask, EcsTaskStatus } from "./types.js";
 
+/**
+ * Strip the gateway's `agent:<id>:` namespace prefix so lookups match
+ * regardless of whether the caller uses the raw key or the normalized one.
+ * e.g. "agent:main:coding-ecs-49" → "coding-ecs-49"
+ */
+function stripAgentPrefix(key: string): string {
+  const m = key.match(/^agent:[^:]+:(.+)$/);
+  return m ? m[1] : key;
+}
+
 export class EcsTaskTracker {
   private byTaskId = new Map<string, EcsActiveTask>();
   private bySessionKey = new Map<string, EcsActiveTask>();
@@ -16,7 +26,7 @@ export class EcsTaskTracker {
       startedAt: Date.now(),
     };
     this.byTaskId.set(task.taskId, active);
-    this.bySessionKey.set(sessionKey, active);
+    this.bySessionKey.set(stripAgentPrefix(sessionKey), active);
     return active;
   }
 
@@ -25,7 +35,7 @@ export class EcsTaskTracker {
   }
 
   getBySessionKey(sessionKey: string): EcsActiveTask | undefined {
-    return this.bySessionKey.get(sessionKey);
+    return this.bySessionKey.get(stripAgentPrefix(sessionKey));
   }
 
   updateStatus(taskId: string, status: EcsTaskStatus): void {
@@ -47,7 +57,7 @@ export class EcsTaskTracker {
     const active = this.byTaskId.get(taskId);
     if (active) {
       this.byTaskId.delete(taskId);
-      this.bySessionKey.delete(active.sessionKey);
+      this.bySessionKey.delete(stripAgentPrefix(active.sessionKey));
     }
     return active;
   }
