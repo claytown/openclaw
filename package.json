@@ -216,6 +216,10 @@
       "types": "./dist/plugin-sdk/ecs.d.ts",
       "default": "./dist/plugin-sdk/ecs.js"
     },
+    "./plugin-sdk/mcp-bridge": {
+      "types": "./dist/plugin-sdk/mcp-bridge.d.ts",
+      "default": "./dist/plugin-sdk/mcp-bridge.js"
+    },
     "./cli-entry": "./openclaw.mjs"
   },
   "scripts": {

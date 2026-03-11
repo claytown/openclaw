@@ -53,6 +53,7 @@ const pluginSdkSubpaths = [
   "zalouser",
   "keyed-async-queue",
   "ecs",
+  "mcp-bridge",
 ] as const;
 
 export default defineConfig({

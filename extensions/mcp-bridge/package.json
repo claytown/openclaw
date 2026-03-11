@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/mcp-bridge",
+  "version": "2026.3.7",
+  "private": true,
+  "description": "MCP server bridge plugin for OpenClaw — spawns MCP servers and exposes their tools as native agent tools.",
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@sinclair/typebox": "0.34.48"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

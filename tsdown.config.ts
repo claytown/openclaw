@@ -86,6 +86,7 @@ const pluginSdkEntrypoints = [
   "account-id",
   "keyed-async-queue",
   "ecs",
+  "mcp-bridge",
 ] as const;
 
 export default defineConfig([
