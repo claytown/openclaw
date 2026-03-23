@@ -113,6 +113,38 @@ describe("ecs_status_update", () => {
     const parsed = parseResult(result as never) as Record<string, unknown>;
     expect(parsed.taskId).toBe("unknown");
   });
+
+  it("uses explicit projectId param when no active task (main agent scenario)", async () => {
+    const deps = makeDeps();
+    const tool = createEcsStatusUpdateTool(deps, {
+      sessionKey: "agent:main:main",
+      agentId: "main",
+    });
+
+    await tool.execute("call-1", {
+      status: "running",
+      summary: "Coordinating SafePlate",
+      projectId: "safeplate",
+    });
+
+    expect(mocks.postStatusUpdate).toHaveBeenCalledWith(expect.anything(), "safeplate");
+  });
+
+  it("tracker projectId takes precedence over explicit param", async () => {
+    const tracker = new EcsTaskTracker();
+    const task = { ...makeTask(), projectId: "from-tracker" };
+    tracker.register(task, "sess-1", undefined, "agent-1");
+    const deps = makeDeps(tracker);
+
+    const tool = createEcsStatusUpdateTool(deps, { sessionKey: "sess-1", agentId: "agent-1" });
+    await tool.execute("call-1", {
+      status: "running",
+      summary: "Working",
+      projectId: "from-param",
+    });
+
+    expect(mocks.postStatusUpdate).toHaveBeenCalledWith(expect.anything(), "from-tracker");
+  });
 });
 
 describe("ecs_ask_question", () => {
@@ -176,6 +208,29 @@ describe("ecs_ask_question", () => {
     expect(parsed.answer).toBeNull();
     expect(parsed.error).toContain("Failed to create Discord thread");
   });
+
+  it("uses explicit projectId param when no active task", async () => {
+    const deps = makeDeps();
+    // Re-set mock since a prior test overrides it to return no threadId.
+    mocks.postQuestion.mockResolvedValue({ messageId: "msg-1", threadId: "thread-1" });
+
+    const tool = createEcsAskQuestionTool(deps, {
+      sessionKey: "agent:main:main",
+      agentId: "main",
+    });
+
+    await tool.execute("call-1", {
+      question: "Which DB should SafePlate use?",
+      projectId: "safeplate",
+    });
+
+    expect(mocks.postQuestion).toHaveBeenCalledWith(expect.anything(), "safeplate");
+    expect(mocks.registerPendingQuestion).toHaveBeenCalledWith(
+      expect.anything(),
+      "thread-1",
+      "safeplate",
+    );
+  });
 });
 
 describe("ecs_raise_issue", () => {
@@ -212,5 +267,20 @@ describe("ecs_raise_issue", () => {
 
     const parsed = parseResult(result as never) as Record<string, unknown>;
     expect(parsed.taskId).toBe("unknown");
+  });
+
+  it("uses explicit projectId param when no active task", async () => {
+    const deps = makeDeps();
+    const tool = createEcsRaiseIssueTool(deps, { agentId: "main" });
+
+    await tool.execute("call-1", {
+      severity: "warn",
+      title: "SafePlate build issue",
+      description: "Something broke",
+      attempted: [],
+      projectId: "safeplate",
+    });
+
+    expect(mocks.postIssue).toHaveBeenCalledWith(expect.anything(), "safeplate");
   });
 });

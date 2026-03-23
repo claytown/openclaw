@@ -27,6 +27,12 @@ const EcsStatusUpdateSchema = Type.Object({
   ),
   summary: Type.String({ description: "Brief summary of current progress" }),
   details: Type.Optional(Type.String({ description: "Additional details" })),
+  projectId: Type.Optional(
+    Type.String({
+      description:
+        "Project ID for channel routing. Only needed when calling from a non-ECS session (e.g. the main agent); ECS subagents resolve this automatically from the task tracker.",
+    }),
+  ),
 });
 
 // --- ecs_ask_question ---
@@ -44,6 +50,12 @@ const EcsAskQuestionSchema = Type.Object({
       description: "Timeout in ms before auto-escalation (default: 5min)",
     }),
   ),
+  projectId: Type.Optional(
+    Type.String({
+      description:
+        "Project ID for channel routing. Only needed when calling from a non-ECS session (e.g. the main agent); ECS subagents resolve this automatically from the task tracker.",
+    }),
+  ),
 });
 
 // --- ecs_raise_issue ---
@@ -55,6 +67,12 @@ const EcsRaiseIssueSchema = Type.Object({
   title: Type.String({ description: "Short issue title" }),
   description: Type.String({ description: "Detailed description of the issue" }),
   attempted: Type.Array(Type.String(), { description: "List of things already attempted" }),
+  projectId: Type.Optional(
+    Type.String({
+      description:
+        "Project ID for channel routing. Only needed when calling from a non-ECS session (e.g. the main agent); ECS subagents resolve this automatically from the task tracker.",
+    }),
+  ),
 });
 
 export type EcsToolDeps = {
@@ -86,10 +104,12 @@ export function createEcsStatusUpdateTool(deps: EcsToolDeps, ctx: EcsToolContext
       // Find the active task for this session.
       const active = ctx.sessionKey ? deps.tracker.getBySessionKey(ctx.sessionKey) : undefined;
       const taskId = active?.task.taskId ?? "unknown";
+      const paramProjectId = readStringParam(params, "projectId");
+      const projectId = active?.task.projectId ?? paramProjectId;
 
       // Debug: trace project routing.
       console.log(
-        `[ecs] status_update: sessionKey=${ctx.sessionKey} taskId=${taskId} projectId=${active?.task.projectId ?? "NONE"} trackerSize=${deps.tracker.size()}`,
+        `[ecs] status_update: sessionKey=${ctx.sessionKey} taskId=${taskId} projectId=${projectId ?? "NONE"} paramProjectId=${paramProjectId ?? "NONE"} trackerSize=${deps.tracker.size()}`,
       );
 
       // Update tracker.
@@ -112,7 +132,7 @@ export function createEcsStatusUpdateTool(deps: EcsToolDeps, ctx: EcsToolContext
 
       // Post to Discord and callback to ECS (fire-and-forget).
       const [discordResult] = await Promise.all([
-        deps.discord.postStatusUpdate(update, active?.task.projectId),
+        deps.discord.postStatusUpdate(update, projectId),
         status === "complete"
           ? deps.callback.reportCompleted(taskId, summary, {
               sessionId: ctx.sessionKey,
@@ -155,6 +175,7 @@ export function createEcsAskQuestionTool(deps: EcsToolDeps, ctx: EcsToolContext)
 
       const active = ctx.sessionKey ? deps.tracker.getBySessionKey(ctx.sessionKey) : undefined;
       const taskId = active?.task.taskId ?? "unknown";
+      const projectId = active?.task.projectId ?? readStringParam(params, "projectId");
 
       const question: EcsQuestion = {
         questionId: `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -167,7 +188,7 @@ export function createEcsAskQuestionTool(deps: EcsToolDeps, ctx: EcsToolContext)
       };
 
       // Post question to Discord and create thread.
-      const discordResult = await deps.discord.postQuestion(question, active?.task.projectId);
+      const discordResult = await deps.discord.postQuestion(question, projectId);
       const threadId = discordResult.threadId;
 
       if (!threadId) {
@@ -196,7 +217,7 @@ export function createEcsAskQuestionTool(deps: EcsToolDeps, ctx: EcsToolContext)
       const result = await deps.questionRelay.registerPendingQuestion(
         question,
         threadId,
-        active?.task.projectId,
+        projectId,
       );
 
       return jsonResult(result);
@@ -224,6 +245,7 @@ export function createEcsRaiseIssueTool(deps: EcsToolDeps, ctx: EcsToolContext):
 
       const active = ctx.sessionKey ? deps.tracker.getBySessionKey(ctx.sessionKey) : undefined;
       const taskId = active?.task.taskId ?? "unknown";
+      const projectId = active?.task.projectId ?? readStringParam(params, "projectId");
 
       const issue = {
         issueId: `iss-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -236,7 +258,7 @@ export function createEcsRaiseIssueTool(deps: EcsToolDeps, ctx: EcsToolContext):
         needsHuman: severity === "critical",
       };
 
-      const discordResult = await deps.discord.postIssue(issue, active?.task.projectId);
+      const discordResult = await deps.discord.postIssue(issue, projectId);
 
       return jsonResult({
         posted: true,
