@@ -131,5 +131,7 @@
   "whatsapp-core",
   "whatsapp-shared",
   "zalo",
-  "zalouser"
+  "zalouser",
+  "ecs",
+  "mcp-bridge"
 ]

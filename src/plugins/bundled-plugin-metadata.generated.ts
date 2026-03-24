@@ -840,6 +840,101 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "ecs",
+    idHint: "ecs",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/ecs",
+    packageVersion: "2026.3.7",
+    packageDescription:
+      "OpenClaw ECS (Execution Control System) — inter-agent task orchestration via Discord",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "ecs",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          enabled: {
+            type: "boolean",
+            description: "Enable the ECS integration.",
+          },
+          discord: {
+            type: "object",
+            properties: {
+              guildId: {
+                type: "string",
+                description: "Discord guild (server) ID.",
+              },
+              channels: {
+                type: "object",
+                properties: {
+                  status: {
+                    type: "string",
+                    description: "Channel ID for status/progress.",
+                  },
+                  info: {
+                    type: "string",
+                    description: "Channel ID for blocking Q&A.",
+                  },
+                  issues: {
+                    type: "string",
+                    description: "Channel ID for issue escalation.",
+                  },
+                },
+              },
+            },
+          },
+          api: {
+            type: "object",
+            properties: {
+              authToken: {
+                type: "string",
+                description: "Bearer token for inbound ECS API requests.",
+              },
+            },
+          },
+          controlPlane: {
+            type: "object",
+            properties: {
+              url: {
+                type: "string",
+                description: "Base URL of the ECS control plane.",
+              },
+              apiKey: {
+                type: "string",
+                description: "API key for control plane callbacks.",
+              },
+            },
+          },
+          agents: {
+            type: "object",
+            properties: {
+              statusIntervalSec: {
+                type: "number",
+                description: "Status heartbeat interval in seconds.",
+              },
+              questionTimeoutMs: {
+                type: "number",
+                description: "Timeout before unanswered question auto-escalates.",
+              },
+              questionEscalateOnTimeout: {
+                type: "boolean",
+                description: "Escalate unanswered questions to #ecs-issues.",
+              },
+            },
+          },
+        },
+      },
+      name: "ECS (Execution Control System)",
+      description: "Inter-agent task orchestration via Discord with control plane callbacks.",
+    },
+  },
+  {
     dirName: "elevenlabs",
     idHint: "elevenlabs",
     source: {
@@ -1629,6 +1724,71 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       channels: ["mattermost"],
+    },
+  },
+  {
+    dirName: "mcp-bridge",
+    idHint: "mcp-bridge",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/mcp-bridge",
+    packageVersion: "2026.3.7",
+    packageDescription:
+      "MCP server bridge plugin for OpenClaw — spawns MCP servers and exposes their tools as native agent tools.",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "mcp-bridge",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          servers: {
+            type: "object",
+            description: "Map of MCP server definitions keyed by server name.",
+            additionalProperties: {
+              type: "object",
+              properties: {
+                command: {
+                  type: "string",
+                  description: "Executable to spawn.",
+                },
+                args: {
+                  type: "array",
+                  items: {
+                    type: "string",
+                  },
+                  description: "Command-line arguments.",
+                },
+                env: {
+                  type: "object",
+                  additionalProperties: {
+                    type: "string",
+                  },
+                  description: "Extra environment variables.",
+                },
+                toolPrefix: {
+                  type: "string",
+                  description: "Prefix for tool names (defaults to server key).",
+                },
+                connectTimeoutMs: {
+                  type: "number",
+                  minimum: 1000,
+                  default: 30000,
+                  description: "Connection timeout in ms.",
+                },
+              },
+              required: ["command"],
+            },
+          },
+        },
+      },
+      name: "MCP Bridge",
+      description:
+        "Spawns MCP servers via stdio and exposes their tools as native OpenClaw agent tools.",
     },
   },
   {

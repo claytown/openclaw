@@ -104,7 +104,10 @@ describe("POST /ecs/questions/:questionId/answer", () => {
 
   it("returns 404 when question is already resolved (idempotent)", async () => {
     // Register and immediately resolve.
-    void relay.registerPendingQuestion({ questionId: "q-test-2", question: "x?" }, "thread-def");
+    void relay.registerPendingQuestion(
+      { questionId: "q-test-2", question: "x?", taskId: "task-test" },
+      "thread-def",
+    );
 
     // First answer succeeds.
     const first = await request(port, "/ecs/questions/q-test-2/answer", {
@@ -121,7 +124,7 @@ describe("POST /ecs/questions/:questionId/answer", () => {
 
   it("defaults answered_by to 'api' when not provided", async () => {
     const questionPromise = relay.registerPendingQuestion(
-      { questionId: "q-test-3", question: "default test" },
+      { questionId: "q-test-3", question: "default test", taskId: "task-test" },
       "thread-ghi",
     );
 
