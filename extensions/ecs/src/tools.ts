@@ -11,6 +11,7 @@ import { setActivePersona } from "./persona-registry.js";
 import { validatePersona } from "./persona.js";
 import type { EcsQuestionRelay } from "./question-relay.js";
 import type { EcsTaskTracker } from "./task-tracker.js";
+import type { EcsTeamsChannels } from "./teams-channels.js";
 import type { EcsIssueSeverity, EcsQuestion, EcsStatusUpdate, EcsTaskStatus } from "./types.js";
 
 const ECS_TASK_STATUSES = ["accepted", "running", "blocked", "complete", "error"] as const;
@@ -78,6 +79,7 @@ const EcsRaiseIssueSchema = Type.Object({
 export type EcsToolDeps = {
   tracker: EcsTaskTracker;
   discord: EcsDiscordChannels;
+  teams: EcsTeamsChannels | null;
   callback: EcsApiCallback;
   questionRelay: EcsQuestionRelay;
 };
@@ -130,9 +132,8 @@ export function createEcsStatusUpdateTool(deps: EcsToolDeps, ctx: EcsToolContext
         timestamp: Date.now(),
       };
 
-      // Post to Discord and callback to ECS (fire-and-forget).
-      const [discordResult] = await Promise.all([
-        deps.discord.postStatusUpdate(update, projectId),
+      // Post to Discord + Teams and callback to ECS (fire-and-forget).
+      const callbackPromise =
         status === "complete"
           ? deps.callback.reportCompleted(taskId, summary, {
               sessionId: ctx.sessionKey,
@@ -146,7 +147,12 @@ export function createEcsStatusUpdateTool(deps: EcsToolDeps, ctx: EcsToolContext
             : deps.callback.reportStatus(taskId, summary, {
                 sessionId: ctx.sessionKey,
                 agentId: resolvedAgentId,
-              }),
+              });
+
+      const [discordResult] = await Promise.all([
+        deps.discord.postStatusUpdate(update, projectId),
+        deps.teams?.postStatusUpdate(update, projectId),
+        callbackPromise,
       ]);
 
       return jsonResult({
@@ -191,12 +197,21 @@ export function createEcsAskQuestionTool(deps: EcsToolDeps, ctx: EcsToolContext)
       const discordResult = await deps.discord.postQuestion(question, projectId);
       const threadId = discordResult.threadId;
 
-      if (!threadId) {
+      // Also post to Teams (message ID used for thread replies).
+      let teamsMessageId: string | undefined;
+      if (deps.teams) {
+        const teamsResult = await deps.teams.postQuestion(question, projectId);
+        teamsMessageId = teamsResult.messageId;
+      }
+
+      // Need at least one channel to have posted successfully.
+      const questionKey = threadId ?? teamsMessageId;
+      if (!questionKey) {
         return jsonResult({
           answer: null,
           timedOut: false,
           escalatedToIssues: false,
-          error: "Failed to create Discord thread for question",
+          error: "Failed to post question to any channel",
         });
       }
 
@@ -208,18 +223,27 @@ export function createEcsAskQuestionTool(deps: EcsToolDeps, ctx: EcsToolContext)
           question_text: question.question,
           context: question.context ?? null,
           asked_by: question.fromAgentId ?? null,
-          discord_thread_id: threadId,
+          discord_thread_id: threadId ?? "",
           discord_channel: "info",
         })
         .catch(() => {});
 
-      // Block on the question relay promise.
-      const result = await deps.questionRelay.registerPendingQuestion(
+      // Register pending question for BOTH Discord thread and Teams message.
+      // The first reply from either channel resolves the question.
+      const relayPromises: Promise<unknown>[] = [];
+      const mainPromise = deps.questionRelay.registerPendingQuestion(
         question,
-        threadId,
+        questionKey,
         projectId,
       );
+      relayPromises.push(mainPromise);
 
+      // If both channels posted, also register the alternate key.
+      if (threadId && teamsMessageId && threadId !== teamsMessageId) {
+        deps.questionRelay.registerAlternateKey(teamsMessageId, threadId);
+      }
+
+      const result = await mainPromise;
       return jsonResult(result);
     },
   };
@@ -258,7 +282,10 @@ export function createEcsRaiseIssueTool(deps: EcsToolDeps, ctx: EcsToolContext):
         needsHuman: severity === "critical",
       };
 
-      const discordResult = await deps.discord.postIssue(issue, projectId);
+      const [discordResult] = await Promise.all([
+        deps.discord.postIssue(issue, projectId),
+        deps.teams?.postIssue(issue, projectId),
+      ]);
 
       return jsonResult({
         posted: true,

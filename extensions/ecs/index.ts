@@ -16,6 +16,8 @@ import { clearActivePersona } from "./src/persona-registry.js";
 import { ProjectChannelManager } from "./src/project-channel-manager.js";
 import { EcsQuestionRelay } from "./src/question-relay.js";
 import { EcsTaskTracker } from "./src/task-tracker.js";
+import { EcsTeamsChannels } from "./src/teams-channels.js";
+import { TeamsProjectChannelManager } from "./src/teams-project-channel-manager.js";
 import {
   createEcsAskQuestionTool,
   createEcsRaiseIssueTool,
@@ -123,9 +125,57 @@ const ecsPlugin = {
     }
 
     const discord = new EcsDiscordChannels(discordToken ?? "", discordCfg, projectManager);
+
+    // Initialize Teams (parallel to Discord, if configured).
+    let teams: EcsTeamsChannels | null = null;
+    if (pluginCfg.teams && pluginCfg.teams.tenantId && pluginCfg.teams.appId) {
+      const teamsCfg = pluginCfg.teams;
+      const teamsCreds = {
+        tenantId: teamsCfg.tenantId,
+        appId: teamsCfg.appId,
+        appPassword: teamsCfg.appPassword,
+        serviceUrl: teamsCfg.serviceUrl,
+      };
+
+      let teamsProjectManager: TeamsProjectChannelManager | undefined;
+      if (teamsCfg.teamId) {
+        teamsProjectManager = new TeamsProjectChannelManager(
+          { tenantId: teamsCfg.tenantId, appId: teamsCfg.appId, appPassword: teamsCfg.appPassword },
+          teamsCfg.teamId,
+          {
+            maxProjects: teamsCfg.maxProjectChannels,
+            log: (msg) => log.info(msg),
+            onProvisioned: (projectId, channelId) => {
+              void callback
+                .reportProjectTeamsChannel({ project_id: projectId, teams_channel_id: channelId })
+                .catch((err) => log.warn(`[ecs] teams channel callback failed: ${err}`));
+            },
+          },
+        );
+        teamsProjectManager.load();
+      }
+
+      teams = new EcsTeamsChannels(teamsCreds, teamsCfg, teamsProjectManager);
+
+      // Wire Teams posts to control plane.
+      teams.setOnPost((info) => {
+        void callback
+          .reportMessage({
+            channel_id: info.channelId,
+            direction: "outbound",
+            embed_title: info.title,
+            content: info.content,
+          })
+          .catch((err) => log.warn(`[ecs] teams-post callback failed: ${err}`));
+      });
+
+      log.info(`[ecs] Teams configured (team: ${teamsCfg.teamId})`);
+    }
+
     const agentsConfig = resolveEcsAgentsConfig(pluginCfg.agents);
     const questionRelay = new EcsQuestionRelay({
       discord,
+      teams,
       defaultTimeoutMs: agentsConfig.questionTimeoutMs,
       escalateOnTimeout: agentsConfig.questionEscalateOnTimeout,
     });
@@ -152,7 +202,7 @@ const ecsPlugin = {
     });
 
     // --- Tools ---
-    const toolDeps: EcsToolDeps = { tracker, discord, callback, questionRelay };
+    const toolDeps: EcsToolDeps = { tracker, discord, teams, callback, questionRelay };
 
     api.registerTool(
       (ctx) => [
@@ -189,17 +239,22 @@ const ecsPlugin = {
           await callback.reportCompleted(taskId, summary, { sessionId: sessionKey });
         }
 
-        await discord.postTaskCompleted(
-          {
-            taskId,
-            agentId: active.agentId,
-            status: isError ? "error" : "complete",
-            summary,
-            durationMs: Date.now() - active.startedAt,
-            threadId: active.discordThreadId,
-          },
-          active.task.projectId,
-        );
+        const completion = {
+          taskId,
+          agentId: active.agentId,
+          status: isError ? ("error" as const) : ("complete" as const),
+          summary,
+          durationMs: Date.now() - active.startedAt,
+          threadId: active.discordThreadId,
+        };
+
+        await discord.postTaskCompleted(completion, active.task.projectId);
+        if (teams) {
+          await teams.postTaskCompleted(
+            { ...completion, threadId: active.teamsMessageId },
+            active.task.projectId,
+          );
+        }
 
         tracker.remove(taskId);
         clearActivePersona(sessionKey);
@@ -215,18 +270,21 @@ const ecsPlugin = {
         const rawId = extractDiscordId(ctx.conversationId);
         if (!rawId || !event.content) return;
 
+        const isEcsDiscord = discord.isEcsChannel(rawId);
+        const isEcsTeams = teams?.isEcsChannel(rawId) ?? false;
+
         log.info(
-          `[ecs] message_received: conversationId=${ctx.conversationId} rawId=${rawId} from=${event.from} isEcs=${discord.isEcsChannel(rawId)} hasPending=${questionRelay.hasPending(rawId)}`,
+          `[ecs] message_received: conversationId=${ctx.conversationId} rawId=${rawId} from=${event.from} isEcsDiscord=${isEcsDiscord} isEcsTeams=${isEcsTeams} hasPending=${questionRelay.hasPending(rawId)}`,
         );
 
         if (questionRelay.hasPending(rawId)) {
           const answeredBy = event.from ?? "unknown";
           questionRelay.resolveQuestion(rawId, event.content, answeredBy);
-          log.info(`[ecs] question in thread ${rawId} answered by ${answeredBy}`);
+          log.info(`[ecs] question in thread/channel ${rawId} answered by ${answeredBy}`);
         }
 
         // Forward ECS-channel messages to the control plane.
-        if (discord.isEcsChannel(rawId)) {
+        if (isEcsDiscord || isEcsTeams) {
           void callback
             .reportMessage({
               channel_id: rawId,
@@ -271,15 +329,17 @@ const ecsPlugin = {
         .catch((err) => log.warn(`[ecs] ecs-post callback failed: ${err}`));
     });
 
-    // Hook: gateway started — post a heartbeat embed.
+    // Hook: gateway started — post a heartbeat.
     api.on(
       "gateway_start",
       async (event) => {
-        await discord.postSystemEvent({
+        const sysEvent = {
           title: "Gateway Online",
           description: `Gateway started on port ${event.port}.`,
           color: 0x2ecc71, // green
-        });
+        };
+        await discord.postSystemEvent(sysEvent);
+        if (teams) await teams.postSystemEvent(sysEvent);
       },
       { priority: 200 },
     );
@@ -291,18 +351,17 @@ const ecsPlugin = {
         const ecsTask = tracker.getBySessionKey(event.childSessionKey);
         // Only post for ECS-managed tasks (not random subagents).
         if (!ecsTask) return;
-        await discord.postSystemEvent(
-          {
-            title: "Agent Session Started",
-            color: 0x3498db, // blue
-            fields: [
-              { name: "Task", value: ecsTask.task.title, inline: true },
-              { name: "Agent", value: event.agentId, inline: true },
-              { name: "Mode", value: event.mode, inline: true },
-            ],
-          },
-          ecsTask.task.projectId,
-        );
+        const sysEvent = {
+          title: "Agent Session Started",
+          color: 0x3498db, // blue
+          fields: [
+            { name: "Task", value: ecsTask.task.title, inline: true },
+            { name: "Agent", value: event.agentId, inline: true },
+            { name: "Mode", value: event.mode, inline: true },
+          ],
+        };
+        await discord.postSystemEvent(sysEvent, ecsTask.task.projectId);
+        if (teams) await teams.postSystemEvent(sysEvent, ecsTask.task.projectId);
       },
       { priority: 200 },
     );

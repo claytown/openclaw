@@ -41,11 +41,32 @@ export type EcsAgentsConfig = {
   questionEscalateOnTimeout?: boolean;
 };
 
+export type EcsTeamsConfig = {
+  /** Azure AD tenant ID. */
+  tenantId: string;
+  /** Azure Bot App ID. */
+  appId: string;
+  /** Azure Bot Client Secret. */
+  appPassword: string;
+  /** Microsoft Teams team (group) ID. */
+  teamId: string;
+  /** Bot Framework service URL. */
+  serviceUrl: string;
+  /** Default pipeline channel ID for non-project messages. */
+  defaultChannel: string;
+  /** Pre-mapped project IDs to existing Teams channel IDs. */
+  projectChannels?: Record<string, string>;
+  /** Max projects with auto-created channels. Default: 100. */
+  maxProjectChannels?: number;
+};
+
 export type EcsConfig = {
   /** Enable the ECS integration. Default: false. */
   enabled?: boolean;
   /** Discord channel configuration for the three intent channels. */
   discord?: EcsDiscordConfig;
+  /** Microsoft Teams channel configuration (one channel per project). */
+  teams?: EcsTeamsConfig;
   /** API authentication configuration. */
   api?: EcsApiConfig;
   /** ECS control plane connection configuration. */

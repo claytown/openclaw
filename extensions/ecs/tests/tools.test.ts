@@ -38,6 +38,7 @@ function makeDeps(tracker?: EcsTaskTracker): EcsToolDeps {
       postQuestion: mocks.postQuestion,
       postIssue: mocks.postIssue,
     } as never,
+    teams: null,
     callback: {
       reportStatus: mocks.reportStatus,
       reportCompleted: mocks.reportCompleted,

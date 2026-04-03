@@ -144,6 +144,16 @@ export class EcsApiCallback {
     });
   }
 
+  async reportProjectTeamsChannel(payload: {
+    project_id: string;
+    teams_channel_id: string;
+  }): Promise<{ ok: boolean }> {
+    return this.post("/agent_project_channels_callback", {
+      ...payload,
+      event: "teams_channel_provisioned",
+    });
+  }
+
   async reportQuestion(payload: {
     question_id: string;
     agent_task_id: string | null;

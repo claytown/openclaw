@@ -53,6 +53,13 @@ export class EcsTaskTracker {
     }
   }
 
+  setTeamsMessage(taskId: string, messageId: string): void {
+    const active = this.byTaskId.get(taskId);
+    if (active) {
+      active.teamsMessageId = messageId;
+    }
+  }
+
   remove(taskId: string): EcsActiveTask | undefined {
     const active = this.byTaskId.get(taskId);
     if (active) {

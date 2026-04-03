@@ -85,6 +85,7 @@ export type EcsActiveTask = {
   agentId?: string;
   status: EcsTaskStatus;
   discordThreadId?: string;
+  teamsMessageId?: string;
   startedAt: number;
   lastStatusUpdate?: number;
 };

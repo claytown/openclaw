@@ -4,6 +4,7 @@
  */
 
 import type { EcsDiscordChannels } from "./discord-channels.js";
+import type { EcsTeamsChannels } from "./teams-channels.js";
 import type { EcsQuestion, EcsQuestionAnswer } from "./types.js";
 
 export type PendingQuestion = {
@@ -22,23 +23,36 @@ export type QuestionResult = {
 };
 
 export class EcsQuestionRelay {
-  /** Keyed by Discord thread ID. */
+  /** Keyed by Discord thread ID or Teams message ID. */
   private pending = new Map<string, PendingQuestion>();
   /** Keyed by question ID for reverse lookup. */
   private byQuestionId = new Map<string, string>();
+  /** Alternate key → primary key (e.g. Teams message ID → Discord thread ID). */
+  private alternateKeys = new Map<string, string>();
 
   private discord: EcsDiscordChannels;
+  private teams: EcsTeamsChannels | null;
   private defaultTimeoutMs: number;
   private escalateOnTimeout: boolean;
 
   constructor(opts: {
     discord: EcsDiscordChannels;
+    teams?: EcsTeamsChannels | null;
     defaultTimeoutMs: number;
     escalateOnTimeout: boolean;
   }) {
     this.discord = opts.discord;
+    this.teams = opts.teams ?? null;
     this.defaultTimeoutMs = opts.defaultTimeoutMs;
     this.escalateOnTimeout = opts.escalateOnTimeout;
+  }
+
+  /**
+   * Register an alternate key that maps to an existing primary key.
+   * Used when a question is posted to both Discord and Teams — either reply resolves it.
+   */
+  registerAlternateKey(alternateKey: string, primaryKey: string): void {
+    this.alternateKeys.set(alternateKey, primaryKey);
   }
 
   /**
@@ -60,6 +74,7 @@ export class EcsQuestionRelay {
         let escalated = false;
         if (this.escalateOnTimeout) {
           await this.discord.postQuestionTimeout(question, projectId);
+          if (this.teams) await this.teams.postQuestionTimeout(question, projectId);
           escalated = true;
         }
 
@@ -107,7 +122,15 @@ export class EcsQuestionRelay {
    * Called by the message_received hook when a reply arrives in an ECS info thread.
    */
   resolveQuestion(threadId: string, answer: string, answeredBy: string): boolean {
-    const entry = this.pending.get(threadId);
+    // Check direct key first, then alternate key.
+    let entry = this.pending.get(threadId);
+    if (!entry) {
+      const primaryKey = this.alternateKeys.get(threadId);
+      if (primaryKey) {
+        entry = this.pending.get(primaryKey);
+        this.alternateKeys.delete(threadId);
+      }
+    }
     if (!entry) {
       return false;
     }
@@ -126,9 +149,11 @@ export class EcsQuestionRelay {
     return this.byQuestionId.get(questionId);
   }
 
-  /** Check if a thread ID has a pending question. */
+  /** Check if a thread/message ID has a pending question (checks alternate keys too). */
   hasPending(threadId: string): boolean {
-    return this.pending.has(threadId);
+    if (this.pending.has(threadId)) return true;
+    const primaryKey = this.alternateKeys.get(threadId);
+    return primaryKey ? this.pending.has(primaryKey) : false;
   }
 
   /** Get the pending question for a thread. */
