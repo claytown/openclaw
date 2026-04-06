@@ -2241,8 +2241,125 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       id: "msteams",
       configSchema: {
         type: "object",
+        properties: {
+          appId: {
+            type: "string",
+          },
+          appPassword: {},
+          tenantId: {
+            type: "string",
+          },
+          webhook: {
+            type: "object",
+            properties: {
+              port: {
+                type: "integer",
+              },
+              path: {
+                type: "string",
+              },
+            },
+            additionalProperties: false,
+          },
+          enabled: {
+            type: "boolean",
+          },
+          capabilities: {
+            type: "array",
+            items: {
+              type: "string",
+            },
+          },
+          dangerouslyAllowNameMatching: {
+            type: "boolean",
+          },
+          markdown: {
+            type: "object",
+          },
+          configWrites: {
+            type: "boolean",
+          },
+          dmPolicy: {
+            type: "string",
+            enum: ["pairing", "allowlist", "open", "disabled"],
+          },
+          allowFrom: {
+            type: "array",
+            items: {
+              type: "string",
+            },
+          },
+          defaultTo: {
+            type: "string",
+          },
+          groupAllowFrom: {
+            type: "array",
+            items: {
+              type: "string",
+            },
+          },
+          groupPolicy: {
+            type: "string",
+            enum: ["open", "disabled", "allowlist"],
+          },
+          textChunkLimit: {
+            type: "integer",
+          },
+          chunkMode: {
+            type: "string",
+            enum: ["length", "newline"],
+          },
+          blockStreamingCoalesce: {
+            type: "object",
+          },
+          mediaAllowHosts: {
+            type: "array",
+            items: {
+              type: "string",
+            },
+          },
+          mediaAuthAllowHosts: {
+            type: "array",
+            items: {
+              type: "string",
+            },
+          },
+          requireMention: {
+            type: "boolean",
+          },
+          historyLimit: {
+            type: "integer",
+          },
+          dmHistoryLimit: {
+            type: "integer",
+          },
+          dms: {
+            type: "object",
+          },
+          replyStyle: {
+            type: "string",
+            enum: ["thread", "top-level"],
+          },
+          teams: {
+            type: "object",
+          },
+          mediaMaxMb: {
+            type: "number",
+          },
+          sharePointSiteId: {
+            type: "string",
+          },
+          heartbeat: {
+            type: "object",
+          },
+          healthMonitor: {
+            type: "object",
+          },
+          responsePrefix: {
+            type: "string",
+          },
+        },
         additionalProperties: false,
-        properties: {},
       },
       channels: ["msteams"],
     },
