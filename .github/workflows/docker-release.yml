@@ -387,3 +387,17 @@ jobs:
           docker buildx imagetools create "${args[@]}" \
             ${{ needs.build-amd64.outputs.slim-digest }} \
             ${{ needs.build-arm64.outputs.slim-digest }}
+
+  # Notify downstream deploy pipeline after successful main-branch image push
+  notify-aab:
+    needs: [create-manifest]
+    if: github.ref == 'refs/heads/main' && needs.create-manifest.result == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Notify agentic-app-builder
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.AAB_DISPATCH_TOKEN }}
+          repository: peaktechsim/agentic-app-builder
+          event-type: image-updated
+          client-payload: '{"tag": "${{ github.sha }}", "image": "ghcr.io/claytown/openclaw", "source_repo": "openclaw"}'

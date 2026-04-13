@@ -1,0 +1,45 @@
+{
+  "id": "mcp-bridge",
+  "name": "MCP Bridge",
+  "description": "Spawns MCP servers via stdio and exposes their tools as native OpenClaw agent tools.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "servers": {
+        "type": "object",
+        "description": "Map of MCP server definitions keyed by server name.",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "Executable to spawn."
+            },
+            "args": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Command-line arguments."
+            },
+            "env": {
+              "type": "object",
+              "additionalProperties": { "type": "string" },
+              "description": "Extra environment variables."
+            },
+            "toolPrefix": {
+              "type": "string",
+              "description": "Prefix for tool names (defaults to server key)."
+            },
+            "connectTimeoutMs": {
+              "type": "number",
+              "minimum": 1000,
+              "default": 30000,
+              "description": "Connection timeout in ms."
+            }
+          },
+          "required": ["command"]
+        }
+      }
+    }
+  }
+}

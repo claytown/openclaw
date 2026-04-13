@@ -1090,6 +1090,14 @@
       "types": "./dist/plugin-sdk/zod.d.ts",
       "default": "./dist/plugin-sdk/zod.js"
     },
+    "./plugin-sdk/ecs": {
+      "types": "./dist/plugin-sdk/ecs.d.ts",
+      "default": "./dist/plugin-sdk/ecs.js"
+    },
+    "./plugin-sdk/mcp-bridge": {
+      "types": "./dist/plugin-sdk/mcp-bridge.d.ts",
+      "default": "./dist/plugin-sdk/mcp-bridge.js"
+    },
     "./extension-api": "./dist/extensionAPI.js",
     "./cli-entry": "./openclaw.mjs"
   },

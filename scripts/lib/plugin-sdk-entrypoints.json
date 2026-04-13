@@ -259,5 +259,7 @@
   "zalo",
   "zalo-setup",
   "zalouser",
-  "zod"
+  "zod",
+  "ecs",
+  "mcp-bridge"
 ]
