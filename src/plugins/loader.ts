@@ -653,13 +653,17 @@ function resolveSetupChannelRegistration(moduleExport: unknown): {
   }
   const setup = resolved as {
     plugin?: unknown;
+    loadSetupPlugin?: unknown;
   };
-  if (!setup.plugin || typeof setup.plugin !== "object") {
-    return {};
+  // Eager pattern (defineChannelPluginEntry)
+  if (setup.plugin && typeof setup.plugin === "object") {
+    return { plugin: setup.plugin as ChannelPlugin };
   }
-  return {
-    plugin: setup.plugin as ChannelPlugin,
-  };
+  // Lazy pattern (defineBundledChannelSetupEntry)
+  if (typeof setup.loadSetupPlugin === "function") {
+    return { plugin: (setup.loadSetupPlugin as () => ChannelPlugin)() };
+  }
+  return {};
 }
 
 function shouldLoadChannelPluginInSetupRuntime(params: {
