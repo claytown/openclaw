@@ -82,6 +82,7 @@ jobs:
         run: |
           set -euo pipefail
           docker build \
+            --build-arg OPENCLAW_EXTENSIONS="ecs msteams" \
             --label "org.opencontainers.image.revision=$(git rev-parse HEAD)" \
             --label "org.opencontainers.image.version=${{ github.event_name == 'workflow_dispatch' && inputs.tag || 'main' }}" \
             --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
