@@ -68,6 +68,8 @@ function buildAgentPrompt(task: EcsTask): string {
     "",
     "3. **ecs_raise_issue** — Escalate a blocker you cannot resolve.",
     "",
+    `**Important:** Always pass taskId: "${task.taskId}" when calling any ECS tool.`,
+    "",
     "## Execution Protocol",
     "",
     '1. Call `ecs_status_update` with status "running" before you begin work.',
@@ -107,16 +109,27 @@ export async function dispatchEcsTask(
       ? await buildPersonaSystemPrompt(task.persona)
       : undefined;
 
-    const result = await deps.subagent.run({
-      sessionKey,
-      message: prompt,
-      extraSystemPrompt,
-      deliver: false, // headless, no external delivery
-      idempotencyKey: task.idempotencyKey,
-    });
+    // Register BEFORE spawning so tools see the task immediately,
+    // even if the plugin registry resolves a separate instance.
+    const active = deps.tracker.register(task, sessionKey, undefined, agentId);
 
-    // Register in tracker.
-    deps.tracker.register(task, sessionKey, result.runId, agentId);
+    let result: SubagentRunResult;
+    try {
+      result = await deps.subagent.run({
+        sessionKey,
+        message: prompt,
+        extraSystemPrompt,
+        deliver: false, // headless, no external delivery
+        idempotencyKey: task.idempotencyKey,
+      });
+    } catch (err) {
+      // Clean up orphaned tracker entry on spawn failure.
+      deps.tracker.remove(task.taskId);
+      throw err;
+    }
+
+    // Backfill runId now that we have it.
+    active.runId = result.runId;
 
     // Activate persona for this session so the bootstrap hook can overlay files.
     if (task.persona) {

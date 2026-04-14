@@ -58,11 +58,13 @@ function resolvePluginToolRegistry(params: {
   loadOptions: PluginLoadOptions;
   allowGatewaySubagentBinding?: boolean;
 }) {
-  if (
-    params.allowGatewaySubagentBinding &&
-    getActivePluginRegistryKey() &&
-    getActivePluginRuntimeSubagentMode() === "gateway-bindable"
-  ) {
+  // When the gateway has loaded a bindable plugin registry, always prefer it
+  // for tool resolution. The gateway registry is a superset that includes all
+  // plugin tools with their original closures (e.g. shared in-memory state
+  // like the ECS TaskTracker). Creating a separate runtime registry would
+  // instantiate fresh plugin instances that don't share state with the gateway
+  // HTTP route handlers.
+  if (getActivePluginRegistryKey() && getActivePluginRuntimeSubagentMode() === "gateway-bindable") {
     return getActivePluginRegistry() ?? resolveRuntimePluginRegistry(params.loadOptions);
   }
   return resolveRuntimePluginRegistry(params.loadOptions);

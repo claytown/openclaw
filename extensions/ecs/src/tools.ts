@@ -28,6 +28,12 @@ const EcsStatusUpdateSchema = Type.Object({
   ),
   summary: Type.String({ description: "Brief summary of current progress" }),
   details: Type.Optional(Type.String({ description: "Additional details" })),
+  taskId: Type.Optional(
+    Type.String({
+      description:
+        "ECS task ID. Auto-resolved from session when available; pass explicitly as fallback.",
+    }),
+  ),
   projectId: Type.Optional(
     Type.String({
       description:
@@ -51,6 +57,12 @@ const EcsAskQuestionSchema = Type.Object({
       description: "Timeout in ms before auto-escalation (default: 5min)",
     }),
   ),
+  taskId: Type.Optional(
+    Type.String({
+      description:
+        "ECS task ID. Auto-resolved from session when available; pass explicitly as fallback.",
+    }),
+  ),
   projectId: Type.Optional(
     Type.String({
       description:
@@ -68,6 +80,12 @@ const EcsRaiseIssueSchema = Type.Object({
   title: Type.String({ description: "Short issue title" }),
   description: Type.String({ description: "Detailed description of the issue" }),
   attempted: Type.Array(Type.String(), { description: "List of things already attempted" }),
+  taskId: Type.Optional(
+    Type.String({
+      description:
+        "ECS task ID. Auto-resolved from session when available; pass explicitly as fallback.",
+    }),
+  ),
   projectId: Type.Optional(
     Type.String({
       description:
@@ -105,7 +123,8 @@ export function createEcsStatusUpdateTool(deps: EcsToolDeps, ctx: EcsToolContext
 
       // Find the active task for this session.
       const active = ctx.sessionKey ? deps.tracker.getBySessionKey(ctx.sessionKey) : undefined;
-      const taskId = active?.task.taskId ?? "unknown";
+      const paramTaskId = readStringParam(params, "taskId");
+      const taskId = active?.task.taskId ?? paramTaskId ?? "unknown";
       const paramProjectId = readStringParam(params, "projectId");
       const projectId = active?.task.projectId ?? paramProjectId;
 
@@ -182,7 +201,8 @@ export function createEcsAskQuestionTool(deps: EcsToolDeps, ctx: EcsToolContext)
       const timeoutMs = typeof params.timeoutMs === "number" ? params.timeoutMs : undefined;
 
       const active = ctx.sessionKey ? deps.tracker.getBySessionKey(ctx.sessionKey) : undefined;
-      const taskId = active?.task.taskId ?? "unknown";
+      const paramTaskId = readStringParam(params, "taskId");
+      const taskId = active?.task.taskId ?? paramTaskId ?? "unknown";
       const projectId = active?.task.projectId ?? readStringParam(params, "projectId");
 
       const question: EcsQuestion = {
@@ -270,7 +290,8 @@ export function createEcsRaiseIssueTool(deps: EcsToolDeps, ctx: EcsToolContext):
         : [];
 
       const active = ctx.sessionKey ? deps.tracker.getBySessionKey(ctx.sessionKey) : undefined;
-      const taskId = active?.task.taskId ?? "unknown";
+      const paramTaskId = readStringParam(params, "taskId");
+      const taskId = active?.task.taskId ?? paramTaskId ?? "unknown";
       const projectId = active?.task.projectId ?? readStringParam(params, "projectId");
 
       const issue = {
