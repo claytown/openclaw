@@ -164,9 +164,7 @@ jobs:
           tags: ${{ steps.tags.outputs.value }}
           labels: ${{ steps.labels.outputs.value }}
           provenance: false
-          push:
-    branches:
-      - main true
+          push: true
 
       - name: Build and push amd64 slim image
         id: build-slim
@@ -182,9 +180,7 @@ jobs:
           tags: ${{ steps.tags.outputs.slim }}
           labels: ${{ steps.labels.outputs.value }}
           provenance: false
-          push:
-    branches:
-      - main true
+          push: true
 
   # Build arm64 images (default + slim share the build stage cache)
   build-arm64:
@@ -285,9 +281,7 @@ jobs:
           tags: ${{ steps.tags.outputs.value }}
           labels: ${{ steps.labels.outputs.value }}
           provenance: false
-          push:
-    branches:
-      - main true
+          push: true
 
       - name: Build and push arm64 slim image
         id: build-slim
@@ -303,9 +297,7 @@ jobs:
           tags: ${{ steps.tags.outputs.slim }}
           labels: ${{ steps.labels.outputs.value }}
           provenance: false
-          push:
-    branches:
-      - main true
+          push: true
 
   # Create multi-platform manifests
   create-manifest:
