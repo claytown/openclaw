@@ -204,7 +204,7 @@ const ecsPlugin = {
     api.registerHttpRoute({
       path: "/ecs",
       match: "prefix",
-      auth: "plugin",
+      auth: "gateway",
       handler: async (req, res) => {
         await apiHandler(req, res);
         return true;
