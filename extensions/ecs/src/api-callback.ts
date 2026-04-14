@@ -120,12 +120,16 @@ export class EcsApiCallback {
   async reportStatus(
     agentTaskId: string,
     summary: string,
-    opts?: { sessionId?: string; agentId?: string },
+    opts?: { sessionId?: string; agentId?: string; progressPct?: number; details?: string },
   ): Promise<{ ok: boolean }> {
     return this.report({
       agent_task_id: agentTaskId,
       event: "status",
-      result: { summary },
+      result: {
+        summary,
+        ...(opts?.progressPct !== undefined ? { progressPct: opts.progressPct } : {}),
+        ...(opts?.details ? { details: opts.details } : {}),
+      },
       session_id: opts?.sessionId,
       agent_id: opts?.agentId,
     });

@@ -147,6 +147,8 @@ export function createEcsStatusUpdateTool(deps: EcsToolDeps, ctx: EcsToolContext
             : deps.callback.reportStatus(taskId, summary, {
                 sessionId: ctx.sessionKey,
                 agentId: resolvedAgentId,
+                progressPct,
+                details,
               });
 
       const [discordResult] = await Promise.all([
