@@ -54,3 +54,5 @@ ECS Control Plane ──POST /ecs/tasks──> OpenClaw Gateway (ECS Plugin)
 - `src/question-relay.ts` — Discord thread-based Q&A blocking
 - `src/discord-channels.ts` — Discord REST client for status/info/issues channels
 - `openclaw.plugin.json` — plugin manifest (required for discovery)
+
+# rebuilt 2026-04-14T00:04:36Z
