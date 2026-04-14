@@ -26,8 +26,8 @@ import {
   type EcsToolDeps,
 } from "./src/tools.js";
 
-/** Extract raw Discord ID from conversationId (strips "channel:" / "user:" prefix). */
-function extractDiscordId(conversationId: string | undefined): string | undefined {
+/** Extract raw channel/thread ID from a prefixed conversationId (strips "channel:" / "user:" / "conversation:" prefix). */
+function extractRawId(conversationId: string | undefined): string | undefined {
   if (!conversationId) {
     return undefined;
   }
@@ -281,7 +281,7 @@ const ecsPlugin = {
     api.on(
       "message_received",
       async (event, ctx) => {
-        const rawId = extractDiscordId(ctx.conversationId);
+        const rawId = extractRawId(ctx.conversationId);
         if (!rawId || !event.content) {
           return;
         }
@@ -297,6 +297,18 @@ const ecsPlugin = {
           const answeredBy = event.from ?? "unknown";
           questionRelay.resolveQuestion(rawId, event.content, answeredBy);
           log.info(`[ecs] question in thread/channel ${rawId} answered by ${answeredBy}`);
+        } else {
+          // Fallback: check threadId from metadata (Teams MessageThreadId is the
+          // thread root message ID, registered as an alternate key in the relay).
+          const threadId = event.metadata?.threadId;
+          const threadIdStr = typeof threadId === "string" ? threadId : undefined;
+          if (threadIdStr && questionRelay.hasPending(threadIdStr)) {
+            const answeredBy = event.from ?? "unknown";
+            questionRelay.resolveQuestion(threadIdStr, event.content, answeredBy);
+            log.info(
+              `[ecs] question in thread ${threadIdStr} answered by ${answeredBy} (via threadId)`,
+            );
+          }
         }
 
         // Forward ECS-channel messages to the control plane.
@@ -314,11 +326,47 @@ const ecsPlugin = {
       { priority: 50 },
     );
 
+    // Hook: intercept thread replies that answer pending ECS questions before
+    // they reach the agent dispatch pipeline. Extracts the thread root message
+    // ID from the session key (:thread:<id> suffix) and checks the question
+    // relay. Returns { handled: true } to suppress the default dispatch so a
+    // spurious fresh agent session is not created in the thread.
+    api.on(
+      "before_dispatch",
+      (event, ctx) => {
+        const sessionKey = ctx.sessionKey ?? event.sessionKey;
+        if (!sessionKey || !event.content) {
+          return undefined;
+        }
+
+        const threadMarker = ":thread:";
+        const threadIdx = sessionKey.lastIndexOf(threadMarker);
+        if (threadIdx < 0) {
+          return undefined;
+        }
+        const threadId = sessionKey.slice(threadIdx + threadMarker.length);
+        if (!threadId) {
+          return undefined;
+        }
+
+        if (questionRelay.hasPending(threadId)) {
+          const answeredBy = event.senderId ?? ctx.senderId ?? "unknown";
+          questionRelay.resolveQuestion(threadId, event.content, answeredBy);
+          log.info(
+            `[ecs] question in thread ${threadId} answered by ${answeredBy} (before_dispatch)`,
+          );
+          return { handled: true };
+        }
+        return undefined;
+      },
+      { priority: 50 },
+    );
+
     // Hook: forward outbound auto-reply messages to control plane.
     api.on(
       "message_sent",
       async (event, ctx) => {
-        const rawId = extractDiscordId(ctx.conversationId);
+        const rawId = extractRawId(ctx.conversationId);
         if (!rawId || !event.success) {
           return;
         }

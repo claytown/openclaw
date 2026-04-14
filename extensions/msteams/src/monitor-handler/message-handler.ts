@@ -784,6 +784,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       OriginatingChannel: "msteams" as const,
       OriginatingTo: teamsTo,
       NativeChannelId: nativeChannelId,
+      MessageThreadId: threadId,
       ReplyToId: activity.replyToId ?? undefined,
       ReplyToBody: includeQuoteContext ? quoteInfo?.body : undefined,
       ReplyToSender: includeQuoteContext ? quoteInfo?.sender : undefined,

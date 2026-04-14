@@ -100,7 +100,7 @@ function createMockApi(pluginConfig: Record<string, unknown>): {
   return { api, hooks, tools, httpRoutes };
 }
 
-describe("extractDiscordId (via message hooks)", () => {
+describe("extractRawId (via message hooks)", () => {
   it("message_received hook strips channel: prefix and forwards ECS messages", async () => {
     const { api, hooks } = createMockApi(makeEcsPluginConfig());
     ecsPlugin.register(api);
@@ -140,6 +140,70 @@ describe("extractDiscordId (via message hooks)", () => {
       { channelId: "discord", conversationId: "ch-info" } as never,
     );
   });
+
+  it("message_received falls back to metadata.threadId when rawId has no pending question", async () => {
+    const { api, hooks } = createMockApi(makeEcsPluginConfig());
+    ecsPlugin.register(api);
+
+    const hook = hooks.find((h) => h.hookName === "message_received");
+    expect(hook).toBeDefined();
+
+    // Simulate a Teams message where conversationId is the channel ID (no relay match)
+    // but metadata.threadId is the question thread root message ID.
+    // Since the relay has no pending question for this test, this just verifies no crash.
+    await hook!.handler(
+      {
+        content: "answer text",
+        from: "human@company.com",
+        metadata: { threadId: "1713000000000" },
+      } as never,
+      { channelId: "msteams", conversationId: "conversation:19:abc@thread.tacv2" } as never,
+    );
+  });
+});
+
+describe("before_dispatch hook (ECS question routing)", () => {
+  it("passes through when session key has no thread suffix", async () => {
+    const { api, hooks } = createMockApi(makeEcsPluginConfig());
+    ecsPlugin.register(api);
+
+    const hook = hooks.find((h) => h.hookName === "before_dispatch");
+    expect(hook).toBeDefined();
+
+    const result = await hook!.handler(
+      { content: "hello", senderId: "user1" } as never,
+      { sessionKey: "agent:main:msteams:default:19:abc@thread.tacv2" } as never,
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it("passes through when thread ID does not match a pending question", async () => {
+    const { api, hooks } = createMockApi(makeEcsPluginConfig());
+    ecsPlugin.register(api);
+
+    const hook = hooks.find((h) => h.hookName === "before_dispatch");
+    expect(hook).toBeDefined();
+
+    const result = await hook!.handler(
+      { content: "hello", senderId: "user1" } as never,
+      { sessionKey: "agent:main:msteams:default:19:abc@thread.tacv2:thread:9999999999" } as never,
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it("passes through when content is empty", async () => {
+    const { api, hooks } = createMockApi(makeEcsPluginConfig());
+    ecsPlugin.register(api);
+
+    const hook = hooks.find((h) => h.hookName === "before_dispatch");
+    expect(hook).toBeDefined();
+
+    const result = await hook!.handler(
+      { content: "", senderId: "user1" } as never,
+      { sessionKey: "agent:main:msteams:default:19:abc@thread.tacv2:thread:123" } as never,
+    );
+    expect(result).toBeUndefined();
+  });
 });
 
 describe("ECS plugin registration", () => {
@@ -155,9 +219,10 @@ describe("ECS plugin registration", () => {
     const { api, hooks, tools, httpRoutes } = createMockApi(makeEcsPluginConfig());
     ecsPlugin.register(api);
 
-    // Should register 5 hooks: subagent_ended, message_received, message_sent, gateway_start, subagent_spawned
-    expect(hooks).toHaveLength(5);
+    // Should register 6 hooks: subagent_ended, message_received, before_dispatch, message_sent, gateway_start, subagent_spawned
+    expect(hooks).toHaveLength(6);
     expect(hooks.map((h) => h.hookName).toSorted()).toEqual([
+      "before_dispatch",
       "gateway_start",
       "message_received",
       "message_sent",
