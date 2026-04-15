@@ -193,6 +193,9 @@ export class EcsTeamsChannels {
   ): Promise<TeamsPostResult> {
     try {
       const result = await botSend(this.creds, channelId, text, replyToId);
+      // Dynamically register any channel we successfully post to so
+      // isEcsChannel() recognizes project/venture channels, not just defaultChannel.
+      this.knownChannelIds.add(channelId);
       if (this.onPostCallback) {
         this.onPostCallback({
           channelId,

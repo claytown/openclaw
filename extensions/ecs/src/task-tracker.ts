@@ -28,6 +28,9 @@ export class EcsTaskTracker {
     };
     this.byTaskId.set(task.taskId, active);
     this.bySessionKey.set(stripAgentPrefix(sessionKey), active);
+    console.log(
+      `[ecs-tracker] register: taskId=${task.taskId} sessionKey=${sessionKey} size=${this.byTaskId.size}`,
+    );
     return active;
   }
 
@@ -61,6 +64,9 @@ export class EcsTaskTracker {
       // Store under the lowercased key so lookups from the session key
       // (which is lowercased by resolveThreadSessionKeys) always match.
       this.byTeamsMessageId.set(messageId.toLowerCase(), active);
+      console.log(
+        `[ecs-tracker] setTeamsMessage: taskId=${taskId} messageId=${messageId} teamsIndex=${this.byTeamsMessageId.size}`,
+      );
     }
   }
 
@@ -76,6 +82,7 @@ export class EcsTaskTracker {
       if (active.teamsMessageId) {
         this.byTeamsMessageId.delete(active.teamsMessageId.toLowerCase());
       }
+      console.log(`[ecs-tracker] remove: taskId=${taskId} remaining=${this.byTaskId.size}`);
     }
     return active;
   }

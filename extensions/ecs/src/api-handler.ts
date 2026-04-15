@@ -59,6 +59,10 @@ function parsePathParams(url: string): {
   if (questionMatch) {
     return { route: "question-answer", questionId: questionMatch[1] };
   }
+  // /ecs/tracker — debug: dump tracker state
+  if (url === "/ecs/tracker") {
+    return { route: "tracker" };
+  }
   // /ecs/tasks, /ecs/tasks/:taskId/status, /ecs/tasks/:taskId/cancel
   const match = url.match(/^\/ecs\/tasks(?:\/([^/]+)(?:\/(status|cancel))?)?$/);
   if (!match) {
@@ -106,6 +110,8 @@ export function createEcsApiHandler(deps: EcsApiHandlerDeps) {
       await handleArchiveProject(res, deps, projectId);
     } else if (route === "question-answer" && questionId && method === "POST") {
       await handleAnswerQuestion(req, res, questionId, deps);
+    } else if (route === "tracker" && method === "GET") {
+      handleGetTrackerState(res, deps.tracker);
     } else {
       sendJson(res, 404, { error: "Not found" });
     }
@@ -286,6 +292,20 @@ async function handleAnswerQuestion(
   }
 
   sendJson(res, 200, { questionId, status: "resolved" });
+}
+
+function handleGetTrackerState(res: ServerResponse, tracker: EcsTaskTracker): void {
+  const tasks = tracker.all().map((t) => ({
+    taskId: t.task.taskId,
+    sessionKey: t.sessionKey,
+    status: t.status,
+    agentId: t.agentId,
+    discordThreadId: t.discordThreadId,
+    teamsMessageId: t.teamsMessageId,
+    startedAt: t.startedAt,
+    lastStatusUpdate: t.lastStatusUpdate,
+  }));
+  sendJson(res, 200, { size: tracker.size(), tasks });
 }
 
 function isValidPriority(v: unknown): v is "low" | "medium" | "high" | "critical" {
