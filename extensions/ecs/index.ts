@@ -23,6 +23,7 @@ import {
   createEcsRaiseIssueTool,
   createEcsSetPersonaTool,
   createEcsStatusUpdateTool,
+  createEcsThreadReplyTool,
   type EcsToolDeps,
 } from "./src/tools.js";
 
@@ -221,9 +222,16 @@ const ecsPlugin = {
         createEcsAskQuestionTool(toolDeps, { sessionKey: ctx.sessionKey, agentId: ctx.agentId }),
         createEcsRaiseIssueTool(toolDeps, { sessionKey: ctx.sessionKey, agentId: ctx.agentId }),
         createEcsSetPersonaTool(toolDeps, { sessionKey: ctx.sessionKey, agentId: ctx.agentId }),
+        createEcsThreadReplyTool(toolDeps, { sessionKey: ctx.sessionKey, agentId: ctx.agentId }),
       ],
       {
-        names: ["ecs_status_update", "ecs_ask_question", "ecs_raise_issue", "ecs_set_persona"],
+        names: [
+          "ecs_status_update",
+          "ecs_ask_question",
+          "ecs_raise_issue",
+          "ecs_set_persona",
+          "ecs_thread_reply",
+        ],
         optional: false,
       },
     );
@@ -373,7 +381,7 @@ const ecsPlugin = {
           log.info(
             `[ecs] forwarding thread reply to agent session ${activeTask.sessionKey} (task ${activeTask.task.taskId}, from ${sender})`,
           );
-          const msg = `[Teams thread reply from ${sender}]\n${event.content}`;
+          const msg = `[Teams thread reply from ${sender}]\n${event.content}\n\nIMPORTANT: Use the ecs_thread_reply tool to respond to this message. The human is waiting for a reply in the task thread.`;
           api.runtime.subagent
             .run({ sessionKey: activeTask.sessionKey, message: msg, deliver: false })
             .catch((err) => log.warn(`[ecs] failed to forward thread reply to agent: ${err}`));

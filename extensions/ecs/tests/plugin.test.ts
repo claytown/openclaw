@@ -230,13 +230,14 @@ describe("ECS plugin registration", () => {
       "subagent_spawned",
     ]);
 
-    // Should register 1 tool factory (producing 4 tools).
+    // Should register 1 tool factory (producing 5 tools).
     expect(tools).toHaveLength(1);
     expect(tools[0].names).toEqual([
       "ecs_status_update",
       "ecs_ask_question",
       "ecs_raise_issue",
       "ecs_set_persona",
+      "ecs_thread_reply",
     ]);
     expect(tools[0].optional).toBe(false);
 
@@ -253,12 +254,13 @@ describe("ECS plugin registration", () => {
 
     const factory = tools[0].factory;
     const result = factory({ sessionKey: "sess-1", agentId: "agent-1" }) as { name: string }[];
-    expect(result).toHaveLength(4);
+    expect(result).toHaveLength(5);
     expect(result.map((t) => t.name)).toEqual([
       "ecs_status_update",
       "ecs_ask_question",
       "ecs_raise_issue",
       "ecs_set_persona",
+      "ecs_thread_reply",
     ]);
   });
 });

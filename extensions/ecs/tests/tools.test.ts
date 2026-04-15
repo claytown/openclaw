@@ -4,6 +4,7 @@ import {
   createEcsAskQuestionTool,
   createEcsRaiseIssueTool,
   createEcsStatusUpdateTool,
+  createEcsThreadReplyTool,
   type EcsToolDeps,
 } from "../src/tools.js";
 import type { EcsTask } from "../src/types.js";
@@ -13,6 +14,8 @@ const mocks = {
   postStatusUpdate: vi.fn().mockResolvedValue({ messageId: "msg-1" }),
   postQuestion: vi.fn().mockResolvedValue({ messageId: "msg-1", threadId: "thread-1" }),
   postIssue: vi.fn().mockResolvedValue({ messageId: "msg-1" }),
+  postToThread: vi.fn().mockResolvedValue({ messageId: "msg-thread-1" }),
+  postReplyToThread: vi.fn().mockResolvedValue({ messageId: "msg-teams-thread-1" }),
   reportStatus: vi.fn().mockResolvedValue({ ok: true }),
   reportCompleted: vi.fn().mockResolvedValue({ ok: true }),
   reportError: vi.fn().mockResolvedValue({ ok: true }),
@@ -37,6 +40,7 @@ function makeDeps(tracker?: EcsTaskTracker): EcsToolDeps {
       postStatusUpdate: mocks.postStatusUpdate,
       postQuestion: mocks.postQuestion,
       postIssue: mocks.postIssue,
+      postToThread: mocks.postToThread,
     } as never,
     teams: null,
     callback: {
@@ -283,5 +287,68 @@ describe("ecs_raise_issue", () => {
     });
 
     expect(mocks.postIssue).toHaveBeenCalledWith(expect.anything(), "safeplate");
+  });
+});
+
+describe("ecs_thread_reply", () => {
+  it("posts reply to Discord thread for active task", async () => {
+    const tracker = new EcsTaskTracker();
+    tracker.register(makeTask(), "sess-1", undefined, "agent-1");
+    tracker.setDiscordThread("task-1", "discord-thread-1");
+    const deps = makeDeps(tracker);
+
+    const tool = createEcsThreadReplyTool(deps, { sessionKey: "sess-1", agentId: "agent-1" });
+    const result = await tool.execute("call-1", {
+      message: "I'm working on the BRD preview component next.",
+    });
+
+    const parsed = parseResult(result as never) as Record<string, unknown>;
+    expect(parsed.posted).toBe(true);
+    expect(parsed.taskId).toBe("task-1");
+    expect(parsed.discordMessageId).toBe("msg-thread-1");
+    expect(mocks.postToThread).toHaveBeenCalledWith(
+      "discord-thread-1",
+      "I'm working on the BRD preview component next.",
+    );
+  });
+
+  it("posts reply to Teams thread when teams deps provided", async () => {
+    const tracker = new EcsTaskTracker();
+    tracker.register(makeTask(), "sess-1", undefined, "agent-1");
+    tracker.setTeamsMessage("task-1", "teams-msg-1");
+    const deps = makeDeps(tracker);
+    deps.teams = {
+      postReplyToThread: mocks.postReplyToThread,
+    } as never;
+
+    const tool = createEcsThreadReplyTool(deps, { sessionKey: "sess-1", agentId: "agent-1" });
+    const result = await tool.execute("call-1", {
+      message: "Running verification now.",
+    });
+
+    const parsed = parseResult(result as never) as Record<string, unknown>;
+    expect(parsed.posted).toBe(true);
+    expect(parsed.teamsMessageId).toBe("msg-teams-thread-1");
+    expect(mocks.postReplyToThread).toHaveBeenCalledWith(
+      "Running verification now.",
+      undefined,
+      "teams-msg-1",
+    );
+  });
+
+  it("gracefully handles no active task", async () => {
+    const deps = makeDeps();
+    const tool = createEcsThreadReplyTool(deps, { sessionKey: "no-task" });
+
+    const result = await tool.execute("call-1", {
+      message: "Hello",
+    });
+
+    const parsed = parseResult(result as never) as Record<string, unknown>;
+    expect(parsed.posted).toBe(true);
+    expect(parsed.taskId).toBe("unknown");
+    expect(parsed.discordMessageId).toBeNull();
+    expect(parsed.teamsMessageId).toBeNull();
+    expect(mocks.postToThread).not.toHaveBeenCalled();
   });
 });

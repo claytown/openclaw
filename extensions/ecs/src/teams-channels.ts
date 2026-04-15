@@ -349,6 +349,18 @@ export class EcsTeamsChannels {
     return this.post(channelId, truncate(text, 2000), undefined, messageId);
   }
 
+  async postReplyToThread(
+    text: string,
+    projectId?: string,
+    threadId?: string,
+  ): Promise<TeamsPostResult> {
+    if (!threadId) {
+      return {};
+    }
+    const channelId = await this.resolveChannel(projectId);
+    return this.postToThread(channelId, threadId, text);
+  }
+
   async postSystemEvent(
     params: {
       title: string;

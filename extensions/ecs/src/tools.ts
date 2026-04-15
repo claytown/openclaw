@@ -324,6 +324,66 @@ export function createEcsRaiseIssueTool(deps: EcsToolDeps, ctx: EcsToolContext):
   };
 }
 
+// --- ecs_thread_reply ---
+
+const EcsThreadReplySchema = Type.Object({
+  message: Type.String({ description: "The reply text to post to the task thread" }),
+  taskId: Type.Optional(
+    Type.String({
+      description:
+        "ECS task ID. Auto-resolved from session when available; pass explicitly as fallback.",
+    }),
+  ),
+  projectId: Type.Optional(
+    Type.String({
+      description:
+        "Project ID for channel routing. Only needed when calling from a non-ECS session.",
+    }),
+  ),
+});
+
+export function createEcsThreadReplyTool(deps: EcsToolDeps, ctx: EcsToolContext): AnyAgentTool {
+  return {
+    label: "ECS",
+    name: "ecs_thread_reply",
+    description:
+      "Reply to a human's message in the task's Teams/Discord thread. Use this when you receive a [Teams thread reply from ...] message and want to respond.",
+    parameters: EcsThreadReplySchema,
+    execute: async (_toolCallId, args) => {
+      const params = args as Record<string, unknown>;
+      const message = readStringParam(params, "message", { required: true });
+
+      const active = ctx.sessionKey ? deps.tracker.getBySessionKey(ctx.sessionKey) : undefined;
+      const paramTaskId = readStringParam(params, "taskId");
+      const taskId = active?.task.taskId ?? paramTaskId ?? "unknown";
+      const projectId = active?.task.projectId ?? readStringParam(params, "projectId");
+
+      let discordMessageId: string | null = null;
+      let teamsMessageId: string | null = null;
+
+      // Post to Discord thread.
+      if (active?.discordThreadId) {
+        const discordResult = await deps.discord.postToThread(active.discordThreadId, message);
+        discordMessageId = discordResult.messageId ?? null;
+      }
+
+      // Post to Teams thread.
+      const teamsThreadId = active?.teamsMessageId;
+      if (deps.teams && teamsThreadId) {
+        const teamsResult = await deps.teams.postReplyToThread(message, projectId, teamsThreadId);
+        teamsMessageId = teamsResult.messageId ?? null;
+      }
+
+      return jsonResult({
+        posted: true,
+        taskId,
+        discordMessageId,
+        teamsMessageId,
+      });
+    },
+  };
+}
+
 // --- ecs_set_persona ---
 
 const EcsSetPersonaSchema = Type.Object({
