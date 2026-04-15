@@ -53,6 +53,25 @@
             "description": "Escalate unanswered questions to #ecs-issues."
           }
         }
+      },
+      "teams": {
+        "type": "object",
+        "properties": {
+          "tenantId": { "type": "string", "description": "Azure AD tenant ID." },
+          "appId": { "type": "string", "description": "Azure Bot app ID." },
+          "appPassword": { "type": "string", "description": "Azure Bot app password." },
+          "serviceUrl": { "type": "string", "description": "Bot Framework service URL." },
+          "teamId": { "type": "string", "description": "Microsoft Teams team ID." },
+          "defaultChannel": {
+            "type": "string",
+            "description": "Default Teams channel ID for pipeline messages."
+          },
+          "projectChannels": {
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "description": "Map of project ID to Teams channel ID."
+          }
+        }
       }
     }
   }
