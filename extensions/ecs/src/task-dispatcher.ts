@@ -160,10 +160,14 @@ export async function dispatchEcsTask(
       deps.tracker.setTeamsMessage(task.taskId, task.teamsThreadId);
     }
 
-    // Also post OpenClaw's own task assignment to Teams and index that thread.
+    // Post OpenClaw's task assignment to Teams.  When the control plane
+    // already created a thread (teamsThreadId), reply to it instead of
+    // creating a second root message.
     if (deps.teams) {
-      const teamsResult = await deps.teams.postTaskAssigned(task);
-      if (teamsResult.messageId) {
+      const teamsResult = await deps.teams.postTaskAssigned(task, undefined, task.teamsThreadId);
+      // Only index the message ID when it is a new root (no existing thread).
+      // When replying, the root thread ID is already indexed above.
+      if (teamsResult.messageId && !task.teamsThreadId) {
         deps.tracker.setTeamsMessage(task.taskId, teamsResult.messageId);
       }
     }

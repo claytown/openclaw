@@ -170,9 +170,10 @@ export function createEcsStatusUpdateTool(deps: EcsToolDeps, ctx: EcsToolContext
                 details,
               });
 
+      const teamsThreadId = active?.teamsMessageId;
       const [discordResult] = await Promise.all([
         deps.discord.postStatusUpdate(update, projectId),
-        deps.teams?.postStatusUpdate(update, projectId),
+        deps.teams?.postStatusUpdate(update, projectId, teamsThreadId),
         callbackPromise,
       ]);
 
@@ -222,7 +223,8 @@ export function createEcsAskQuestionTool(deps: EcsToolDeps, ctx: EcsToolContext)
       // Also post to Teams (message ID used for thread replies).
       let teamsMessageId: string | undefined;
       if (deps.teams) {
-        const teamsResult = await deps.teams.postQuestion(question, projectId);
+        const teamsThreadId = active?.teamsMessageId;
+        const teamsResult = await deps.teams.postQuestion(question, projectId, teamsThreadId);
         teamsMessageId = teamsResult.messageId;
       }
 
@@ -305,9 +307,10 @@ export function createEcsRaiseIssueTool(deps: EcsToolDeps, ctx: EcsToolContext):
         needsHuman: severity === "critical",
       };
 
+      const teamsThreadId = active?.teamsMessageId;
       const [discordResult] = await Promise.all([
         deps.discord.postIssue(issue, projectId),
-        deps.teams?.postIssue(issue, projectId),
+        deps.teams?.postIssue(issue, projectId, teamsThreadId),
       ]);
 
       return jsonResult({

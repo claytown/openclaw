@@ -229,7 +229,11 @@ export class EcsTeamsChannels {
 
   // --- Task lifecycle ---
 
-  async postTaskAssigned(task: EcsTask, projectId?: string): Promise<TeamsPostResult> {
+  async postTaskAssigned(
+    task: EcsTask,
+    projectId?: string,
+    threadId?: string,
+  ): Promise<TeamsPostResult> {
     const channelId =
       task.teamsChannelId ?? (await this.resolveChannel(projectId ?? task.projectId));
     const text = [
@@ -240,10 +244,14 @@ export class EcsTeamsChannels {
       "",
       truncate(task.description, 800),
     ].join("\n");
-    return this.post(channelId, text, `Task Assigned: ${task.title}`);
+    return this.post(channelId, text, `Task Assigned: ${task.title}`, threadId);
   }
 
-  async postStatusUpdate(update: EcsStatusUpdate, projectId?: string): Promise<TeamsPostResult> {
+  async postStatusUpdate(
+    update: EcsStatusUpdate,
+    projectId?: string,
+    threadId?: string,
+  ): Promise<TeamsPostResult> {
     const channelId = await this.resolveChannel(projectId);
     const pct = update.progressPct !== undefined ? ` (${update.progressPct}%)` : "";
     const text = [
@@ -254,7 +262,7 @@ export class EcsTeamsChannels {
     ]
       .filter(Boolean)
       .join("\n");
-    return this.post(channelId, text, `Status: ${update.status}`);
+    return this.post(channelId, text, `Status: ${update.status}`, threadId);
   }
 
   async postTaskCompleted(
@@ -273,21 +281,18 @@ export class EcsTeamsChannels {
       truncate(completion.summary, 800),
     ].join("\n");
 
-    const result = await this.post(channelId, text, `Task ${label}: ${completion.taskId}`);
-
-    // Also post to the task's thread if we have a root message ID.
+    // Reply in the existing thread when available; otherwise post as root.
     if (completion.threadId) {
-      await this.postToThread(
-        channelId,
-        completion.threadId,
-        `${icon} ${label}: ${completion.summary}`,
-      );
+      return this.postToThread(channelId, completion.threadId, text);
     }
-
-    return result;
+    return this.post(channelId, text, `Task ${label}: ${completion.taskId}`);
   }
 
-  async postQuestion(question: EcsQuestion, projectId?: string): Promise<TeamsPostResult> {
+  async postQuestion(
+    question: EcsQuestion,
+    projectId?: string,
+    threadId?: string,
+  ): Promise<TeamsPostResult> {
     const channelId = await this.resolveChannel(projectId);
     const text = [
       `**❓ Question** | \`${question.taskId}\``,
@@ -299,10 +304,14 @@ export class EcsTeamsChannels {
     ]
       .filter(Boolean)
       .join("\n");
-    return this.post(channelId, text, "Question");
+    return this.post(channelId, text, "Question", threadId);
   }
 
-  async postQuestionTimeout(question: EcsQuestion, projectId?: string): Promise<TeamsPostResult> {
+  async postQuestionTimeout(
+    question: EcsQuestion,
+    projectId?: string,
+    threadId?: string,
+  ): Promise<TeamsPostResult> {
     const channelId = await this.resolveChannel(projectId);
     const text = [
       `**⚠️ Unanswered Question Escalation** | \`${question.taskId}\``,
@@ -311,10 +320,14 @@ export class EcsTeamsChannels {
       "",
       `> ${truncate(question.question, 600)}`,
     ].join("\n");
-    return this.post(channelId, text, "Question Timeout");
+    return this.post(channelId, text, "Question Timeout", threadId);
   }
 
-  async postIssue(issue: EcsIssue, projectId?: string): Promise<TeamsPostResult> {
+  async postIssue(
+    issue: EcsIssue,
+    projectId?: string,
+    threadId?: string,
+  ): Promise<TeamsPostResult> {
     const channelId = await this.resolveChannel(projectId);
     const icon = issue.severity === "critical" ? "🔴" : issue.severity === "error" ? "🟠" : "🟡";
     const text = [
@@ -329,7 +342,7 @@ export class EcsTeamsChannels {
     ]
       .filter(Boolean)
       .join("\n");
-    return this.post(channelId, text, `Issue: ${issue.title}`);
+    return this.post(channelId, text, `Issue: ${issue.title}`, threadId);
   }
 
   async postToThread(channelId: string, messageId: string, text: string): Promise<TeamsPostResult> {
