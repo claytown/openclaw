@@ -58,12 +58,14 @@ export class EcsTaskTracker {
     const active = this.byTaskId.get(taskId);
     if (active) {
       active.teamsMessageId = messageId;
-      this.byTeamsMessageId.set(messageId, active);
+      // Store under the lowercased key so lookups from the session key
+      // (which is lowercased by resolveThreadSessionKeys) always match.
+      this.byTeamsMessageId.set(messageId.toLowerCase(), active);
     }
   }
 
   getByTeamsMessageId(messageId: string): EcsActiveTask | undefined {
-    return this.byTeamsMessageId.get(messageId);
+    return this.byTeamsMessageId.get(messageId.toLowerCase());
   }
 
   remove(taskId: string): EcsActiveTask | undefined {
@@ -72,7 +74,7 @@ export class EcsTaskTracker {
       this.byTaskId.delete(taskId);
       this.bySessionKey.delete(stripAgentPrefix(active.sessionKey));
       if (active.teamsMessageId) {
-        this.byTeamsMessageId.delete(active.teamsMessageId);
+        this.byTeamsMessageId.delete(active.teamsMessageId.toLowerCase());
       }
     }
     return active;

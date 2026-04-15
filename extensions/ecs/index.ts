@@ -351,6 +351,10 @@ const ecsPlugin = {
           return undefined;
         }
 
+        log.info(
+          `[ecs] before_dispatch: sessionKey=${sessionKey} threadId=${threadId} hasPending=${questionRelay.hasPending(threadId)} trackerMatch=${!!tracker.getByTeamsMessageId(threadId)} trackerSize=${tracker.size()}`,
+        );
+
         // Path 1: pending question — resolve it.
         if (questionRelay.hasPending(threadId)) {
           const answeredBy = event.senderId ?? ctx.senderId ?? "unknown";
