@@ -74,11 +74,19 @@ export class EcsTaskTracker {
     const active = this.byTaskId.get(taskId);
     if (active) {
       active.teamsMessageId = messageId;
+      const key = messageId.toLowerCase();
       // Store under the lowercased key so lookups from the session key
       // (which is lowercased by resolveThreadSessionKeys) always match.
-      this.byTeamsMessageId.set(messageId.toLowerCase(), active);
+      this.byTeamsMessageId.set(key, active);
+      // Track all indexed keys for this task so remove() can clean them all up.
+      if (!active.teamsMessageIds) {
+        active.teamsMessageIds = [];
+      }
+      if (!active.teamsMessageIds.includes(key)) {
+        active.teamsMessageIds.push(key);
+      }
       console.log(
-        `[ecs-tracker] setTeamsMessage: taskId=${taskId} messageId=${messageId} teamsIndex=${this.byTeamsMessageId.size}`,
+        `[ecs-tracker] setTeamsMessage: taskId=${taskId} messageId=${messageId} teamsIndex=${this.byTeamsMessageId.size} keysForTask=${active.teamsMessageIds.length}`,
       );
     }
   }
@@ -92,8 +100,8 @@ export class EcsTaskTracker {
     if (active) {
       this.byTaskId.delete(taskId);
       this.bySessionKey.delete(stripAgentPrefix(active.sessionKey));
-      if (active.teamsMessageId) {
-        this.byTeamsMessageId.delete(active.teamsMessageId.toLowerCase());
+      for (const key of active.teamsMessageIds ?? []) {
+        this.byTeamsMessageId.delete(key);
       }
       console.log(`[ecs-tracker] remove: taskId=${taskId} remaining=${this.byTaskId.size}`);
     }

@@ -147,7 +147,13 @@ export async function dispatchEcsTask(
       deps.tracker.setDiscordThread(task.taskId, discordResult.threadId);
     }
 
-    // Echo task assignment to Teams (mirrors Discord above).
+    // Register the control plane's Teams thread ID (from dispatch_payload)
+    // so inbound replies in that thread are routed to the agent session.
+    if (task.teamsThreadId) {
+      deps.tracker.setTeamsMessage(task.taskId, task.teamsThreadId);
+    }
+
+    // Also post OpenClaw's own task assignment to Teams and index that thread.
     if (deps.teams) {
       const teamsResult = await deps.teams.postTaskAssigned(task);
       if (teamsResult.messageId) {

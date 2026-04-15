@@ -19,6 +19,8 @@ export type EcsTask = {
   metadata?: Record<string, unknown>;
   persona?: string;
   idempotencyKey?: string;
+  /** Teams thread ID from the control plane's dispatch notification. */
+  teamsThreadId?: string;
 };
 
 export type EcsTaskAck = {
@@ -86,6 +88,8 @@ export type EcsActiveTask = {
   status: EcsTaskStatus;
   discordThreadId?: string;
   teamsMessageId?: string;
+  /** All Teams thread/message IDs indexed for this task (for cleanup). */
+  teamsMessageIds?: string[];
   startedAt: number;
   lastStatusUpdate?: number;
 };
