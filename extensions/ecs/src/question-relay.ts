@@ -1,11 +1,31 @@
 /**
  * Blocking Q&A implementation for ECS agent questions.
  * Maps Discord thread IDs to deferred promises that resolve when an answer arrives.
+ * Uses globalThis singleton so all plugin instances share the same relay.
  */
 
 import type { EcsDiscordChannels } from "./discord-channels.js";
 import type { EcsTeamsChannels } from "./teams-channels.js";
 import type { EcsQuestion, EcsQuestionAnswer } from "./types.js";
+
+const RELAY_KEY = Symbol.for("openclaw.ecsQuestionRelay");
+type RelayHolder = { instance: EcsQuestionRelay };
+
+export type EcsQuestionRelayOpts = {
+  discord: EcsDiscordChannels;
+  teams?: EcsTeamsChannels | null;
+  defaultTimeoutMs: number;
+  escalateOnTimeout: boolean;
+};
+
+/** Return the process-wide singleton relay. Created on first call. */
+export function getEcsQuestionRelay(opts: EcsQuestionRelayOpts): EcsQuestionRelay {
+  const g = globalThis as typeof globalThis & { [RELAY_KEY]?: RelayHolder };
+  if (!g[RELAY_KEY]) {
+    g[RELAY_KEY] = { instance: new EcsQuestionRelay(opts) };
+  }
+  return g[RELAY_KEY].instance;
+}
 
 export type PendingQuestion = {
   question: EcsQuestion;
@@ -35,12 +55,7 @@ export class EcsQuestionRelay {
   private defaultTimeoutMs: number;
   private escalateOnTimeout: boolean;
 
-  constructor(opts: {
-    discord: EcsDiscordChannels;
-    teams?: EcsTeamsChannels | null;
-    defaultTimeoutMs: number;
-    escalateOnTimeout: boolean;
-  }) {
+  constructor(opts: EcsQuestionRelayOpts) {
     this.discord = opts.discord;
     this.teams = opts.teams ?? null;
     this.defaultTimeoutMs = opts.defaultTimeoutMs;

@@ -14,8 +14,8 @@ import { resolveEcsAgentsConfig, type EcsConfig } from "./src/config.js";
 import { EcsDiscordChannels } from "./src/discord-channels.js";
 import { clearActivePersona } from "./src/persona-registry.js";
 import { ProjectChannelManager } from "./src/project-channel-manager.js";
-import { EcsQuestionRelay } from "./src/question-relay.js";
-import { EcsTaskTracker } from "./src/task-tracker.js";
+import { getEcsQuestionRelay } from "./src/question-relay.js";
+import { getEcsTaskTracker } from "./src/task-tracker.js";
 import { EcsTeamsChannels } from "./src/teams-channels.js";
 import { TeamsProjectChannelManager } from "./src/teams-project-channel-manager.js";
 import {
@@ -100,7 +100,7 @@ const ecsPlugin = {
     }
 
     // Initialize modules.
-    const tracker = new EcsTaskTracker();
+    const tracker = getEcsTaskTracker();
     const callback = new EcsApiCallback(pluginCfg.controlPlane ?? {});
     const discordCfg = pluginCfg.discord ?? {
       guildId: "",
@@ -183,7 +183,7 @@ const ecsPlugin = {
     }
 
     const agentsConfig = resolveEcsAgentsConfig(pluginCfg.agents);
-    const questionRelay = new EcsQuestionRelay({
+    const questionRelay = getEcsQuestionRelay({
       discord,
       teams,
       defaultTimeoutMs: agentsConfig.questionTimeoutMs,

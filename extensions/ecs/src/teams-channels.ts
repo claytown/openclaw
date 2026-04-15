@@ -132,6 +132,18 @@ export type TeamsPostInfo = {
   content?: string;
 };
 
+// --- Shared channel set (survives multi-instance plugin loading) ---
+
+const TEAMS_CHANNELS_KEY = Symbol.for("openclaw.ecsTeamsKnownChannels");
+
+function getKnownTeamsChannelIds(): Set<string> {
+  const g = globalThis as typeof globalThis & { [TEAMS_CHANNELS_KEY]?: Set<string> };
+  if (!g[TEAMS_CHANNELS_KEY]) {
+    g[TEAMS_CHANNELS_KEY] = new Set();
+  }
+  return g[TEAMS_CHANNELS_KEY];
+}
+
 // --- Main class ---
 
 export class EcsTeamsChannels {
@@ -139,7 +151,6 @@ export class EcsTeamsChannels {
   private config: EcsTeamsConfig;
   private projectManager?: TeamsProjectChannelManager;
   private onPostCallback?: (info: TeamsPostInfo) => void;
-  private knownChannelIds = new Set<string>();
 
   constructor(
     creds: TeamsCreds,
@@ -150,7 +161,7 @@ export class EcsTeamsChannels {
     this.config = config;
     this.projectManager = projectManager;
     if (config.defaultChannel) {
-      this.knownChannelIds.add(config.defaultChannel);
+      getKnownTeamsChannelIds().add(config.defaultChannel);
     }
   }
 
@@ -159,7 +170,7 @@ export class EcsTeamsChannels {
   }
 
   isEcsChannel(id: string): boolean {
-    if (this.knownChannelIds.has(id)) {
+    if (getKnownTeamsChannelIds().has(id)) {
       return true;
     }
     if (this.projectManager) {
@@ -194,8 +205,8 @@ export class EcsTeamsChannels {
     try {
       const result = await botSend(this.creds, channelId, text, replyToId);
       // Dynamically register any channel we successfully post to so
-      // isEcsChannel() recognizes project/venture channels, not just defaultChannel.
-      this.knownChannelIds.add(channelId);
+      // isEcsChannel() recognizes project/venture channels across all instances.
+      getKnownTeamsChannelIds().add(channelId);
       if (this.onPostCallback) {
         this.onPostCallback({
           channelId,

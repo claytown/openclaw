@@ -1,6 +1,19 @@
-/** In-memory tracking of active ECS tasks. */
+/** In-memory tracking of active ECS tasks. Uses globalThis singleton so all
+ *  plugin instances (gateway + subagents) share the same tracker. */
 
 import type { EcsActiveTask, EcsTask, EcsTaskStatus } from "./types.js";
+
+const TRACKER_KEY = Symbol.for("openclaw.ecsTaskTracker");
+type TrackerHolder = { instance: EcsTaskTracker };
+
+/** Return the process-wide singleton tracker. */
+export function getEcsTaskTracker(): EcsTaskTracker {
+  const g = globalThis as typeof globalThis & { [TRACKER_KEY]?: TrackerHolder };
+  if (!g[TRACKER_KEY]) {
+    g[TRACKER_KEY] = { instance: new EcsTaskTracker() };
+  }
+  return g[TRACKER_KEY].instance;
+}
 
 /**
  * Strip the gateway's `agent:<id>:` namespace prefix so lookups match
