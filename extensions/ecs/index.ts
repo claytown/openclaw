@@ -194,6 +194,7 @@ const ecsPlugin = {
     const apiHandler = createEcsApiHandler({
       tracker,
       discord,
+      teams,
       callback,
       subagent: api.runtime.subagent,
       apiConfig: pluginCfg.api ?? {},
@@ -326,14 +327,15 @@ const ecsPlugin = {
       { priority: 50 },
     );
 
-    // Hook: intercept thread replies that answer pending ECS questions before
-    // they reach the agent dispatch pipeline. Extracts the thread root message
-    // ID from the session key (:thread:<id> suffix) and checks the question
-    // relay. Returns { handled: true } to suppress the default dispatch so a
-    // spurious fresh agent session is not created in the thread.
+    // Hook: intercept thread replies in ECS task threads before they reach
+    // the agent dispatch pipeline. Two paths:
+    // 1. Pending question in the relay → resolve it and suppress dispatch.
+    // 2. Active task in the tracker (by Teams message ID) → forward the
+    //    message to the running agent session via subagent.run().
+    // Both return { handled: true } to prevent a spurious fresh session.
     api.on(
       "before_dispatch",
-      (event, ctx) => {
+      async (event, ctx) => {
         const sessionKey = ctx.sessionKey ?? event.sessionKey;
         if (!sessionKey || !event.content) {
           return undefined;
@@ -349,6 +351,7 @@ const ecsPlugin = {
           return undefined;
         }
 
+        // Path 1: pending question — resolve it.
         if (questionRelay.hasPending(threadId)) {
           const answeredBy = event.senderId ?? ctx.senderId ?? "unknown";
           questionRelay.resolveQuestion(threadId, event.content, answeredBy);
@@ -357,6 +360,22 @@ const ecsPlugin = {
           );
           return { handled: true };
         }
+
+        // Path 2: active task whose Teams thread matches — forward the
+        // human's message to the agent session so it has context.
+        const activeTask = tracker.getByTeamsMessageId(threadId);
+        if (activeTask) {
+          const sender = event.senderId ?? ctx.senderId ?? "unknown";
+          log.info(
+            `[ecs] forwarding thread reply to agent session ${activeTask.sessionKey} (task ${activeTask.task.taskId}, from ${sender})`,
+          );
+          const msg = `[Teams thread reply from ${sender}]\n${event.content}`;
+          api.runtime.subagent
+            .run({ sessionKey: activeTask.sessionKey, message: msg, deliver: false })
+            .catch((err) => log.warn(`[ecs] failed to forward thread reply to agent: ${err}`));
+          return { handled: true };
+        }
+
         return undefined;
       },
       { priority: 50 },

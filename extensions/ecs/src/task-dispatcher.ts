@@ -9,6 +9,7 @@ import type { EcsDiscordChannels } from "./discord-channels.js";
 import { setActivePersona } from "./persona-registry.js";
 import { loadPersonaBootstrapFiles } from "./persona.js";
 import type { EcsTaskTracker } from "./task-tracker.js";
+import type { EcsTeamsChannels } from "./teams-channels.js";
 import type { EcsTask, EcsTaskAck } from "./types.js";
 
 export type SubagentRunner = {
@@ -24,6 +25,7 @@ export type SubagentRunner = {
 export type TaskDispatcherDeps = {
   tracker: EcsTaskTracker;
   discord: EcsDiscordChannels;
+  teams?: EcsTeamsChannels | null;
   callback: EcsApiCallback;
   subagent: SubagentRunner;
 };
@@ -143,6 +145,14 @@ export async function dispatchEcsTask(
     const discordResult = await deps.discord.postTaskAssigned(task);
     if (discordResult.threadId) {
       deps.tracker.setDiscordThread(task.taskId, discordResult.threadId);
+    }
+
+    // Echo task assignment to Teams (mirrors Discord above).
+    if (deps.teams) {
+      const teamsResult = await deps.teams.postTaskAssigned(task);
+      if (teamsResult.messageId) {
+        deps.tracker.setTeamsMessage(task.taskId, teamsResult.messageId);
+      }
     }
 
     return {

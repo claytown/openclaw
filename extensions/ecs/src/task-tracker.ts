@@ -15,6 +15,7 @@ function stripAgentPrefix(key: string): string {
 export class EcsTaskTracker {
   private byTaskId = new Map<string, EcsActiveTask>();
   private bySessionKey = new Map<string, EcsActiveTask>();
+  private byTeamsMessageId = new Map<string, EcsActiveTask>();
 
   register(task: EcsTask, sessionKey: string, runId?: string, agentId?: string): EcsActiveTask {
     const active: EcsActiveTask = {
@@ -57,7 +58,12 @@ export class EcsTaskTracker {
     const active = this.byTaskId.get(taskId);
     if (active) {
       active.teamsMessageId = messageId;
+      this.byTeamsMessageId.set(messageId, active);
     }
+  }
+
+  getByTeamsMessageId(messageId: string): EcsActiveTask | undefined {
+    return this.byTeamsMessageId.get(messageId);
   }
 
   remove(taskId: string): EcsActiveTask | undefined {
@@ -65,6 +71,9 @@ export class EcsTaskTracker {
     if (active) {
       this.byTaskId.delete(taskId);
       this.bySessionKey.delete(stripAgentPrefix(active.sessionKey));
+      if (active.teamsMessageId) {
+        this.byTeamsMessageId.delete(active.teamsMessageId);
+      }
     }
     return active;
   }
@@ -80,5 +89,6 @@ export class EcsTaskTracker {
   clear(): void {
     this.byTaskId.clear();
     this.bySessionKey.clear();
+    this.byTeamsMessageId.clear();
   }
 }
