@@ -68,7 +68,14 @@ async function botSend(
 ): Promise<{ id: string }> {
   const token = await getBotToken(creds);
   const base = creds.serviceUrl.replace(/\/$/, "");
-  const url = `${base}/v3/conversations/${encodeURIComponent(conversationId)}/activities`;
+
+  // For Teams channel thread replies, the conversation URL must include
+  // `;messageid=<rootMessageId>` — setting replyToId on the activity body
+  // alone does NOT create a thread reply in Teams channels.
+  const effectiveConversationId = replyToId
+    ? `${conversationId};messageid=${replyToId}`
+    : conversationId;
+  const url = `${base}/v3/conversations/${encodeURIComponent(effectiveConversationId)}/activities`;
 
   const activity: Record<string, unknown> = {
     type: "message",
