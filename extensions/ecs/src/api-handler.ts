@@ -165,6 +165,7 @@ async function handleAssignTask(
         : undefined,
     persona: typeof body.persona === "string" ? body.persona : undefined,
     idempotencyKey: typeof body.idempotencyKey === "string" ? body.idempotencyKey : undefined,
+    teamsChannelId: typeof body.teams_channel_id === "string" ? body.teams_channel_id : undefined,
     teamsThreadId: typeof body.teams_thread_id === "string" ? body.teams_thread_id : undefined,
   };
 

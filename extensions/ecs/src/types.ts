@@ -19,6 +19,8 @@ export type EcsTask = {
   metadata?: Record<string, unknown>;
   persona?: string;
   idempotencyKey?: string;
+  /** Teams channel ID from the control plane (venture channel where the task was dispatched). */
+  teamsChannelId?: string;
   /** Teams thread ID from the control plane's dispatch notification. */
   teamsThreadId?: string;
 };
@@ -88,6 +90,8 @@ export type EcsActiveTask = {
   status: EcsTaskStatus;
   discordThreadId?: string;
   teamsMessageId?: string;
+  /** The Teams channel ID for this task (venture channel, if any). */
+  teamsChannelId?: string;
   /** All Teams thread/message IDs indexed for this task (for cleanup). */
   teamsMessageIds?: string[];
   startedAt: number;

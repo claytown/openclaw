@@ -244,7 +244,7 @@ describe("ECS plugin registration", () => {
     expect(httpRoutes).toHaveLength(1);
     expect(httpRoutes[0].path).toBe("/ecs");
     expect(httpRoutes[0].match).toBe("prefix");
-    expect(httpRoutes[0].auth).toBe("plugin");
+    expect(httpRoutes[0].auth).toBe("gateway");
   });
 
   it("tool factory produces tools with session context", () => {

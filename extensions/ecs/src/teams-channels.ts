@@ -169,6 +169,11 @@ export class EcsTeamsChannels {
     this.onPostCallback = cb;
   }
 
+  /** Eagerly register a channel ID so isEcsChannel() recognizes it. */
+  registerChannel(channelId: string): void {
+    getKnownTeamsChannelIds().add(channelId);
+  }
+
   isEcsChannel(id: string): boolean {
     if (getKnownTeamsChannelIds().has(id)) {
       return true;
@@ -225,7 +230,8 @@ export class EcsTeamsChannels {
   // --- Task lifecycle ---
 
   async postTaskAssigned(task: EcsTask, projectId?: string): Promise<TeamsPostResult> {
-    const channelId = await this.resolveChannel(projectId ?? task.projectId);
+    const channelId =
+      task.teamsChannelId ?? (await this.resolveChannel(projectId ?? task.projectId));
     const text = [
       `**Task Assigned** | \`${task.taskId}\``,
       "---",

@@ -147,6 +147,13 @@ export async function dispatchEcsTask(
       deps.tracker.setDiscordThread(task.taskId, discordResult.threadId);
     }
 
+    // Eagerly register the venture channel so isEcsChannel() recognizes
+    // inbound messages even if the postTaskAssigned call below fails.
+    if (task.teamsChannelId && deps.teams) {
+      deps.teams.registerChannel(task.teamsChannelId);
+      active.teamsChannelId = task.teamsChannelId;
+    }
+
     // Register the control plane's Teams thread ID (from dispatch_payload)
     // so inbound replies in that thread are routed to the agent session.
     if (task.teamsThreadId) {

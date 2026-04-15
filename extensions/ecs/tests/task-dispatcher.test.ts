@@ -29,8 +29,10 @@ function makeDeps(): TaskDispatcherDeps & { subagentCalls: Record<string, unknow
   return {
     subagentCalls,
     tracker: {
-      register: vi.fn(),
+      register: vi.fn().mockReturnValue({ status: "accepted", startedAt: Date.now() }),
       setDiscordThread: vi.fn(),
+      setTeamsMessage: vi.fn(),
+      remove: vi.fn(),
     } as unknown as TaskDispatcherDeps["tracker"],
     discord: {
       postTaskAssigned: vi.fn().mockResolvedValue({}),
