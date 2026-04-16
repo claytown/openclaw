@@ -506,21 +506,33 @@ const ecsPlugin = {
               });
               if (outcome.queued) {
                 log.info(
-                  `[ecs] queued message into active session via subagent.queueMessage (session ${activeTask.sessionKey})`,
+                  `[ecs] forward succeeded via queueMessage sessionKey=${activeTask.sessionKey}`,
                 );
                 return;
               }
               log.info(
                 `[ecs] subagent.queueMessage not queued (reason=${outcome.reason ?? "unknown"}); falling back to subagent.run for session ${activeTask.sessionKey}`,
               );
-              await api.runtime.subagent.run({
-                sessionKey: activeTask.sessionKey,
-                message: msg,
-                deliver: false,
-              });
+              try {
+                const runResult = await api.runtime.subagent.run({
+                  sessionKey: activeTask.sessionKey,
+                  message: msg,
+                  deliver: false,
+                });
+                log.info(
+                  `[ecs] forward succeeded via run sessionKey=${activeTask.sessionKey} runId=${runResult.runId}`,
+                );
+              } catch (runErr) {
+                const runMsg = runErr instanceof Error ? runErr.message : String(runErr);
+                log.warn(
+                  `[ecs] forward failed via run sessionKey=${activeTask.sessionKey}: ${runMsg}`,
+                );
+              }
             } catch (err) {
-              const msg = err instanceof Error ? err.message : String(err);
-              log.warn(`[ecs] failed to forward thread reply to agent: ${msg}`);
+              const errMsg = err instanceof Error ? err.message : String(err);
+              log.warn(
+                `[ecs] forward failed via queueMessage sessionKey=${activeTask.sessionKey}: ${errMsg}`,
+              );
             }
           })();
 

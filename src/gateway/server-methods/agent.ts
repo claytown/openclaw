@@ -68,6 +68,7 @@ import {
   validateAgentWaitParams,
 } from "../protocol/index.js";
 import { performGatewaySessionReset } from "../session-reset-service.js";
+import { resolveSessionStoreKey } from "../session-store-key.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   canonicalizeSpawnedByForAgent,
@@ -970,7 +971,25 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
     const sessionKey = params.sessionKey;
     const message = params.message;
-    const sessionId = resolveActiveEmbeddedRunSessionId(sessionKey);
+    // The gateway `agent` handler canonicalizes sessionKey via
+    // resolveSessionStoreKey before dispatching, so the embedded run is
+    // registered under the canonical form (e.g. `agent:<agentId>:<rest>`).
+    // Plugins that kept the raw form (e.g. `<agent>-ecs-<taskId>`) must resolve
+    // against either shape, so try the raw key first and fall back to the
+    // canonical one.
+    let sessionId = resolveActiveEmbeddedRunSessionId(sessionKey);
+    if (!sessionId) {
+      try {
+        const cfg = loadConfig();
+        const canonical = resolveSessionStoreKey({ cfg, sessionKey });
+        if (canonical && canonical !== sessionKey) {
+          sessionId = resolveActiveEmbeddedRunSessionId(canonical);
+        }
+      } catch {
+        // loadConfig can fail in minimal/test environments — fall through to
+        // the no_active_run response below.
+      }
+    }
     if (!sessionId) {
       respond(true, { queued: false, reason: "no_active_run" });
       return;

@@ -69,6 +69,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: () => ["main"],
   resolveAgentWorkspaceDir: (cfg: { agents?: { defaults?: { workspace?: string } } }) =>
     cfg?.agents?.defaults?.workspace ?? "/tmp/workspace",
+  resolveDefaultAgentId: () => "main",
 }));
 
 vi.mock("../../agents/pi-embedded-runner/runs.js", () => ({
@@ -1255,5 +1256,33 @@ describe("gateway agent.queueMessage handler", () => {
       isWebchatConnect: () => false,
     });
     expect(respond).toHaveBeenCalledWith(true, { queued: false, reason: "not_streaming" });
+  });
+
+  it("falls back to the canonical sessionKey when the raw key misses", async () => {
+    // The gateway `agent` handler canonicalizes sessionKey before dispatching,
+    // so an embedded run for ECS task 67 (dispatched as "coding-ecs-67") lives
+    // under "agent:main:coding-ecs-67" in the active-run map. Plugins often
+    // keep the raw sessionKey they passed in, so queueMessage must resolve
+    // either shape. With the mocked default agent id of "main",
+    // resolveSessionStoreKey canonicalizes "coding-ecs-67" → "agent:main:coding-ecs-67".
+    mocks.resolveActiveEmbeddedRunSessionId.mockImplementation((key: string) =>
+      key === "agent:main:coding-ecs-67" ? "session-id-canonical" : undefined,
+    );
+    mocks.queueEmbeddedPiMessageDetailed.mockReturnValue({ queued: true });
+    const respond = vi.fn();
+    await agentHandlers["agent.queueMessage"]({
+      params: { sessionKey: "coding-ecs-67", message: "hi" },
+      respond: respond as never,
+      context: makeContext(),
+      req: { type: "req", id: "qm-4", method: "agent.queueMessage" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+    expect(respond).toHaveBeenCalledWith(true, { queued: true });
+    expect(mocks.queueEmbeddedPiMessageDetailed).toHaveBeenCalledWith("session-id-canonical", "hi");
+    expect(mocks.resolveActiveEmbeddedRunSessionId).toHaveBeenCalledWith("coding-ecs-67");
+    expect(mocks.resolveActiveEmbeddedRunSessionId).toHaveBeenCalledWith(
+      "agent:main:coding-ecs-67",
+    );
   });
 });

@@ -69,13 +69,14 @@ async function botSend(
   const token = await getBotToken(creds);
   const base = creds.serviceUrl.replace(/\/$/, "");
 
-  // For Teams channel thread replies, the conversation URL must include
-  // `;messageid=<rootMessageId>` — setting replyToId on the activity body
-  // alone does NOT create a thread reply in Teams channels.
-  const effectiveConversationId = replyToId
-    ? `${conversationId};messageid=${replyToId}`
-    : conversationId;
-  const url = `${base}/v3/conversations/${encodeURIComponent(effectiveConversationId)}/activities`;
+  // Teams channel thread replies work reliably only when posted to the
+  // SAME conversation URL as the root activity, with replyToId in the body
+  // (matching the working MCP client pattern). The legacy
+  // `;messageid=<rootMessageId>` URL suffix is a Bot Framework
+  // proactive-messaging shape that does NOT locate the activity reliably in
+  // Teams channels — it surfaces as ActivityNotFoundInConversation 404s on
+  // every reply. Always use the plain conversationId URL.
+  const url = `${base}/v3/conversations/${encodeURIComponent(conversationId)}/activities`;
 
   const activity: Record<string, unknown> = {
     type: "message",
