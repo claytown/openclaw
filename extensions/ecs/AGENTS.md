@@ -5,7 +5,6 @@ Inter-agent task orchestration via Discord with control plane callbacks.
 ## Build & Deploy
 
 - Build: `pnpm build` from repo root (builds dist/plugin-sdk/ecs.js along with everything else)
-- Deploy to miniclaw: `scripts/deploy-miniclaw.sh` (builds, rsyncs, restarts gateway)
 - Tests: `pnpm test extensions/ecs`
 
 ## Adding a new plugin-sdk subpath (6-place checklist)
@@ -22,14 +21,6 @@ When adding a new `openclaw/plugin-sdk/<name>` entry, you must update ALL 6 file
 | 6   | `vitest.config.ts`             | `pluginSdkSubpaths`              | Tests can't resolve the import                            |
 
 The most dangerous are #4 and #5: missing #4 silently skips the JS build, and missing #5 causes a runtime-only crash (jiti falls through to CJS resolution via `root-alias.cjs` and appends the subpath as a file path).
-
-## Miniclaw Deploy Notes
-
-- Gateway is managed by the Mac app (auto-respawns on kill)
-- Real logs: `~/.openclaw/logs/gateway.log` on the openclaw user
-- Config: `/Users/openclaw/.openclaw/openclaw.json` — ECS config lives at `plugins.entries.ecs.config`
-- After deploy, the deploy script kills the gateway; the Mac app respawns it with the new dist
-- If Mac app isn't running, start manually: `sudo su - openclaw -c 'cd /Users/openclaw/projects/openclaw-ecs && node dist/entry.js gateway run --bind loopback --port 18789 --verbose'`
 
 ## Architecture
 
