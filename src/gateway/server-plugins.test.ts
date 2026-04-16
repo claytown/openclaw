@@ -524,6 +524,21 @@ describe("loadGatewayPlugins", () => {
     expect(typeof subagent?.getSession).toBe("function");
   });
 
+  test("subagent.queueMessage bypasses dispatchGatewayMethod and works outside a request scope", async () => {
+    const runtime = serverPluginsModule.createGatewaySubagentRuntime();
+
+    // No gateway request scope is set and no fallback context has been
+    // registered — queueMessage must still resolve (returning the
+    // embedded-runner outcome) rather than throwing or dispatching.
+    const result = await runtime.queueMessage({
+      sessionKey: `test-missing-run-${Math.random().toString(36).slice(2)}`,
+      message: "hello",
+    });
+
+    expect(result).toEqual({ queued: false, reason: "no_active_run" });
+    expect(handleGatewayRequest).not.toHaveBeenCalled();
+  });
+
   test("forwards provider and model overrides when the request scope is authorized", async () => {
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);

@@ -241,4 +241,33 @@ describe("ECS before_dispatch forwarding", () => {
     // Posting to a known-dead thread would 404 again — suppress it.
     expect(teamsMocks.__mocks.postReplyToThread).not.toHaveBeenCalled();
   });
+
+  it("does not mark the Teams thread dead when forwarding fails with an arbitrary error", async () => {
+    const { api, hooks, queueMessage, run } = createApi(makeConfig());
+    queueMessage.mockRejectedValue(
+      new Error("Plugin runtime subagent methods are only available during a gateway request."),
+    );
+    run.mockRejectedValue(new Error("subagent unavailable"));
+
+    ecsPlugin.register(api);
+    const hook = hooks.find((h) => h.hookName === "before_dispatch");
+
+    const result = await hook!.handler(
+      { content: "hi", senderId: "human@example.com" } as never,
+      { sessionKey: `agent:main:msteams:default:thread:${threadId}` } as never,
+    );
+    expect(result).toEqual({ handled: true });
+
+    // Let the fire-and-forget chain settle (queueMessage rejects → fallback
+    // to run → run rejects → caught and logged, not rethrown).
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    const tracker = getEcsTaskTracker();
+    const active = tracker.findByTeamsThread(threadId);
+    expect(active).toBeDefined();
+    // Forwarding failures must NOT flip the tracker's dead-thread flag. That
+    // bit is reserved for Teams 404 ActivityNotFoundInConversation responses.
+    expect(active?.teamsThreadIsDead).not.toBe(true);
+  });
 });

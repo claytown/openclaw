@@ -9,6 +9,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntimeLoaderLogger } from "../plugins/runtime/load-context.js";
+import { queueSubagentMessageInProcess } from "../plugins/runtime/runtime-subagent-queue.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { PluginLogger } from "../plugins/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -354,24 +355,10 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       }
       return { runId };
     },
-    async queueMessage(params) {
-      const payload = await dispatchGatewayMethod<{ queued?: unknown; reason?: unknown }>(
-        "agent.queueMessage",
-        {
-          sessionKey: params.sessionKey,
-          message: params.message,
-        },
-      );
-      const queued = payload?.queued === true;
-      const reasonRaw = payload?.reason;
-      const reason =
-        reasonRaw === "no_active_run" || reasonRaw === "not_streaming" || reasonRaw === "compacting"
-          ? reasonRaw
-          : queued
-            ? undefined
-            : "unknown";
-      return queued ? { queued: true } : { queued: false, reason };
-    },
+    // queueMessage is a pure in-process op — skip the gateway request plumbing
+    // so it works from any async context (including channel webhook handlers
+    // that run outside a gateway request scope).
+    queueMessage: queueSubagentMessageInProcess,
     async waitForRun(params) {
       const payload = await dispatchGatewayMethod<{ status?: string; error?: string }>(
         "agent.wait",

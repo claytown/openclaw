@@ -268,4 +268,57 @@ describe("plugin runtime command execution", () => {
     });
     expect(run).toHaveBeenCalledWith({ sessionKey: "s-2", message: "hello" });
   });
+
+  it("queueMessage resolves outside a gateway request even when no gateway subagent is bound", async () => {
+    const queueModule = await import("./runtime-subagent-queue.js");
+    const spy = vi
+      .spyOn(queueModule, "queueSubagentMessageInProcess")
+      .mockResolvedValue({ queued: true });
+
+    clearGatewaySubagentRuntime();
+    const runtime = createPluginRuntime();
+
+    await expect(
+      runtime.subagent.queueMessage({ sessionKey: "s-3", message: "hi" }),
+    ).resolves.toEqual({ queued: true });
+    expect(spy).toHaveBeenCalledWith({ sessionKey: "s-3", message: "hi" });
+
+    spy.mockRestore();
+  });
+
+  it("non-queueMessage subagent methods still throw outside a gateway request", () => {
+    clearGatewaySubagentRuntime();
+    const runtime = createPluginRuntime();
+
+    expect(() => runtime.subagent.run({ sessionKey: "s-4", message: "x" })).toThrow(
+      "Plugin runtime subagent methods are only available during a gateway request.",
+    );
+    expect(() => runtime.subagent.waitForRun({ runId: "r-1" })).toThrow(
+      "Plugin runtime subagent methods are only available during a gateway request.",
+    );
+    expect(() => runtime.subagent.getSessionMessages({ sessionKey: "s-4" })).toThrow(
+      "Plugin runtime subagent methods are only available during a gateway request.",
+    );
+    expect(() => runtime.subagent.getSession({ sessionKey: "s-4" })).toThrow(
+      "Plugin runtime subagent methods are only available during a gateway request.",
+    );
+    expect(() => runtime.subagent.deleteSession({ sessionKey: "s-4" })).toThrow(
+      "Plugin runtime subagent methods are only available during a gateway request.",
+    );
+  });
+
+  it("queueMessage under the late-binding proxy prefers the gateway subagent when bound", async () => {
+    const gatewayQueue = vi.fn().mockResolvedValue({ queued: true });
+    setGatewaySubagentRuntime({
+      ...createGatewaySubagentRuntime(),
+      queueMessage: gatewayQueue,
+    });
+
+    const runtime = createPluginRuntime({ allowGatewaySubagentBinding: true });
+
+    await expect(
+      runtime.subagent.queueMessage({ sessionKey: "s-5", message: "hi" }),
+    ).resolves.toEqual({ queued: true });
+    expect(gatewayQueue).toHaveBeenCalledWith({ sessionKey: "s-5", message: "hi" });
+  });
 });

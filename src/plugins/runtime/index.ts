@@ -27,6 +27,7 @@ import { createRuntimeConfig } from "./runtime-config.js";
 import { createRuntimeEvents } from "./runtime-events.js";
 import { createRuntimeLogging } from "./runtime-logging.js";
 import { createRuntimeMedia } from "./runtime-media.js";
+import { queueSubagentMessageInProcess } from "./runtime-subagent-queue.js";
 import { createRuntimeSystem } from "./runtime-system.js";
 import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
 import { createRuntimeTasks } from "./runtime-tasks.js";
@@ -127,7 +128,10 @@ function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
   return {
     run: unavailable,
     waitForRun: unavailable,
-    queueMessage: unavailable,
+    // queueMessage is a pure in-process op on the embedded run map. It doesn't
+    // need a gateway request scope, so it stays available even when the rest
+    // of the subagent surface is unavailable (channel webhooks, etc.).
+    queueMessage: queueSubagentMessageInProcess,
     getSessionMessages: unavailable,
     getSession: unavailable,
     deleteSession: unavailable,
