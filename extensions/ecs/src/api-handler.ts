@@ -8,11 +8,11 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { EcsApiConfig } from "./config.js";
+import { extractAgentIdOverride, normalizeDispatchPayload } from "./dispatch-payload.js";
 import type { ProjectChannelManager } from "./project-channel-manager.js";
 import type { EcsQuestionRelay } from "./question-relay.js";
 import { dispatchEcsTask, type TaskDispatcherDeps } from "./task-dispatcher.js";
 import type { EcsTaskTracker } from "./task-tracker.js";
-import type { EcsTask } from "./types.js";
 
 /** Constant-time secret comparison (inlined to avoid core dependency). */
 function safeEqualSecret(
@@ -132,45 +132,14 @@ async function handleAssignTask(
     return;
   }
 
-  // Validate required fields.
-  const rawTaskId = body.agent_task_id;
-  const taskId =
-    typeof body.taskId === "string"
-      ? body.taskId
-      : typeof rawTaskId === "string"
-        ? rawTaskId
-        : typeof rawTaskId === "number"
-          ? String(rawTaskId)
-          : "";
-  const title = typeof body.title === "string" ? body.title : "";
-  const description = typeof body.description === "string" ? body.description : "";
-
-  if (!taskId || !title) {
+  const task = normalizeDispatchPayload(body);
+  if (!task) {
     sendJson(res, 400, { error: "taskId and title are required" });
     return;
   }
 
-  const task: EcsTask = {
-    taskId,
-    epicId: typeof body.epicId === "string" ? body.epicId : undefined,
-    projectId: typeof body.projectId === "string" ? body.projectId : undefined,
-    title,
-    description,
-    assignedAgentId: typeof body.assignedAgentId === "string" ? body.assignedAgentId : undefined,
-    priority: isValidPriority(body.priority) ? body.priority : "medium",
-    deadline: typeof body.deadline === "string" ? body.deadline : undefined,
-    metadata:
-      typeof body.metadata === "object" && body.metadata !== null
-        ? (body.metadata as Record<string, unknown>)
-        : undefined,
-    persona: typeof body.persona === "string" ? body.persona : undefined,
-    idempotencyKey: typeof body.idempotencyKey === "string" ? body.idempotencyKey : undefined,
-    teamsChannelId: typeof body.teams_channel_id === "string" ? body.teams_channel_id : undefined,
-    teamsThreadId: typeof body.teams_thread_id === "string" ? body.teams_thread_id : undefined,
-  };
-
   const ack = await dispatchEcsTask(task, deps, {
-    agentId: typeof body.agentId === "string" ? body.agentId : undefined,
+    agentId: extractAgentIdOverride(body),
   });
 
   const status = ack.status === "accepted" ? 200 : 400;
@@ -308,8 +277,4 @@ function handleGetTrackerState(res: ServerResponse, tracker: EcsTaskTracker): vo
     lastStatusUpdate: t.lastStatusUpdate,
   }));
   sendJson(res, 200, { size: tracker.size(), tasks });
-}
-
-function isValidPriority(v: unknown): v is "low" | "medium" | "high" | "critical" {
-  return v === "low" || v === "medium" || v === "high" || v === "critical";
 }

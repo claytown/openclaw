@@ -5,6 +5,10 @@
 
 import type { EcsControlPlaneConfig } from "./config.js";
 
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
 export type EcsCallbackEvent = "started" | "completed" | "error" | "status" | "message";
 
 export type EcsCallbackPayload = {
@@ -55,6 +59,53 @@ export class EcsApiCallback {
     } catch (err) {
       console.warn(`[ecs] callback to ${url} failed:`, err instanceof Error ? err.message : err);
       return { ok: false };
+    }
+  }
+
+  /**
+   * Fetch dispatch payloads for tasks the control plane considers active
+   * (status in (queued, running) with a non-null dispatch_payload). Used by
+   * the plugin on startup to repopulate the in-memory task tracker after a
+   * pod restart. Returns [] on any transport/parse failure so callers can
+   * treat this as best-effort.
+   */
+  async fetchActiveTasks(): Promise<Array<Record<string, unknown>>> {
+    if (!this.baseUrl) {
+      return [];
+    }
+
+    const url = `${this.baseUrl}/agent_tasks_active`;
+    const headers: Record<string, string> = { Accept: "application/json" };
+    if (this.apiKey) {
+      headers["Authorization"] = `Bearer ${this.apiKey}`;
+    }
+
+    try {
+      const resp = await fetch(url, {
+        method: "GET",
+        headers,
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!resp.ok) {
+        console.warn(`[ecs] fetchActiveTasks ${url} returned ${resp.status}`);
+        return [];
+      }
+      const parsed = (await resp.json()) as unknown;
+      // Accept either a bare array or `{ tasks: [...] }` wrapper so the
+      // control-plane implementer has some flexibility.
+      if (Array.isArray(parsed)) {
+        return parsed.filter((x): x is Record<string, unknown> => isRecord(x));
+      }
+      if (isRecord(parsed) && Array.isArray(parsed.tasks)) {
+        return parsed.tasks.filter((x: unknown): x is Record<string, unknown> => isRecord(x));
+      }
+      return [];
+    } catch (err) {
+      console.warn(
+        `[ecs] fetchActiveTasks ${url} failed:`,
+        err instanceof Error ? err.message : err,
+      );
+      return [];
     }
   }
 

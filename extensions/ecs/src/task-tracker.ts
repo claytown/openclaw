@@ -29,6 +29,7 @@ export class EcsTaskTracker {
   private byTaskId = new Map<string, EcsActiveTask>();
   private bySessionKey = new Map<string, EcsActiveTask>();
   private byTeamsMessageId = new Map<string, EcsActiveTask>();
+  private byTeamsChannelId = new Map<string, EcsActiveTask>();
 
   register(task: EcsTask, sessionKey: string, runId?: string, agentId?: string): EcsActiveTask {
     const active: EcsActiveTask = {
@@ -37,14 +38,22 @@ export class EcsTaskTracker {
       runId,
       agentId,
       status: "accepted",
+      teamsChannelId: task.teamsChannelId,
       startedAt: Date.now(),
     };
     this.byTaskId.set(task.taskId, active);
     this.bySessionKey.set(stripAgentPrefix(sessionKey), active);
+    if (task.teamsChannelId) {
+      this.byTeamsChannelId.set(task.teamsChannelId, active);
+    }
     console.log(
       `[ecs-tracker] register: taskId=${task.taskId} sessionKey=${sessionKey} size=${this.byTaskId.size}`,
     );
     return active;
+  }
+
+  getByTeamsChannelId(channelId: string): EcsActiveTask | undefined {
+    return this.byTeamsChannelId.get(channelId);
   }
 
   getByTaskId(taskId: string): EcsActiveTask | undefined {
@@ -148,6 +157,9 @@ export class EcsTaskTracker {
       for (const key of active.teamsMessageIds ?? []) {
         this.byTeamsMessageId.delete(key);
       }
+      if (active.teamsChannelId) {
+        this.byTeamsChannelId.delete(active.teamsChannelId);
+      }
       console.log(`[ecs-tracker] remove: taskId=${taskId} remaining=${this.byTaskId.size}`);
     }
     return active;
@@ -165,5 +177,6 @@ export class EcsTaskTracker {
     this.byTaskId.clear();
     this.bySessionKey.clear();
     this.byTeamsMessageId.clear();
+    this.byTeamsChannelId.clear();
   }
 }

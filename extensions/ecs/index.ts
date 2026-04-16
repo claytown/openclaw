@@ -12,6 +12,7 @@ import { EcsApiCallback } from "./src/api-callback.js";
 import { createEcsApiHandler } from "./src/api-handler.js";
 import { resolveEcsAgentsConfig, type EcsConfig } from "./src/config.js";
 import { EcsDiscordChannels } from "./src/discord-channels.js";
+import { normalizeDispatchPayload } from "./src/dispatch-payload.js";
 import { clearActivePersona } from "./src/persona-registry.js";
 import { ProjectChannelManager } from "./src/project-channel-manager.js";
 import { getEcsQuestionRelay } from "./src/question-relay.js";
@@ -168,6 +169,19 @@ const ecsPlugin = {
 
       teams = new EcsTeamsChannels(teamsCreds, teamsCfg, teamsProjectManager);
 
+      // Seed statically-configured project channel IDs so isEcsChannel()
+      // recognizes them even before we successfully post to any of them.
+      // Without this, venture replies after a pod restart are rejected by
+      // the ACL check (config.teams.projectChannels is consulted for outbound
+      // routing but never added to the known-channels set).
+      const seedChannels = teamsCfg.projectChannels ? Object.values(teamsCfg.projectChannels) : [];
+      for (const chId of seedChannels) {
+        teams.registerChannel(chId);
+      }
+      if (seedChannels.length > 0) {
+        log.info(`[ecs] seeded ${seedChannels.length} project channel(s) from config`);
+      }
+
       // Wire Teams posts to control plane.
       teams.setOnPost((info) => {
         void callback
@@ -199,6 +213,66 @@ const ecsPlugin = {
       defaultTimeoutMs: agentsConfig.questionTimeoutMs,
       escalateOnTimeout: agentsConfig.questionEscalateOnTimeout,
     });
+
+    // Determine which rule (if any) accepts a Teams channel id for ECS.
+    // Returns the path name so the message_received log shows why a
+    // message was accepted, which makes debugging production drops easy.
+    type TeamsAclPath = "default" | "projectChannels" | "registered" | "tracker" | null;
+    const teamsAclPath = (id: string): TeamsAclPath => {
+      if (!teams) {
+        return null;
+      }
+      const teamsCfg = pluginCfg.teams;
+      if (teamsCfg?.defaultChannel === id) {
+        return "default";
+      }
+      if (teamsCfg?.projectChannels) {
+        for (const chId of Object.values(teamsCfg.projectChannels)) {
+          if (chId === id) {
+            return "projectChannels";
+          }
+        }
+      }
+      if (teams.isEcsChannel(id)) {
+        return "registered";
+      }
+      if (tracker.getByTeamsChannelId(id)) {
+        return "tracker";
+      }
+      return null;
+    };
+
+    // Rehydrate the tracker on startup so replies to in-flight tasks route
+    // correctly across a pod restart. Fire-and-forget: register() is sync;
+    // logging the result is enough for operators.
+    if (pluginCfg.controlPlane?.url) {
+      void (async () => {
+        try {
+          const payloads = await callback.fetchActiveTasks();
+          let rehydrated = 0;
+          for (const payload of payloads) {
+            const task = normalizeDispatchPayload(payload);
+            if (!task) {
+              continue;
+            }
+            const agentId = task.assignedAgentId ?? "coding";
+            const sessionKey = `${agentId}-ecs-${task.taskId}`;
+            tracker.register(task, sessionKey, undefined, agentId);
+            if (task.teamsChannelId && teams) {
+              teams.registerChannel(task.teamsChannelId);
+            }
+            if (task.teamsThreadId) {
+              tracker.setTeamsMessage(task.taskId, task.teamsThreadId);
+            }
+            rehydrated++;
+          }
+          log.info(`[ecs] rehydrated ${rehydrated} active task(s) from control plane`);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.warn(`[ecs] tracker rehydrate failed: ${msg}`);
+        }
+      })();
+    }
 
     // Sweep stale tracker entries so abandoned tasks don't accumulate Teams
     // thread indices that later 404 on status-update posts.
@@ -321,10 +395,11 @@ const ecsPlugin = {
         }
 
         const isEcsDiscord = discord.isEcsChannel(rawId);
-        const isEcsTeams = teams?.isEcsChannel(rawId) ?? false;
+        const aclPath = teamsAclPath(rawId);
+        const isEcsTeams = aclPath != null;
 
         log.info(
-          `[ecs] message_received: conversationId=${ctx.conversationId} rawId=${rawId} from=${event.from} isEcsDiscord=${isEcsDiscord} isEcsTeams=${isEcsTeams} hasPending=${questionRelay.hasPending(rawId)}`,
+          `[ecs] message_received: conversationId=${ctx.conversationId} rawId=${rawId} from=${event.from} isEcsDiscord=${isEcsDiscord} isEcsTeams=${isEcsTeams}${aclPath ? ` via=${aclPath}` : ""} hasPending=${questionRelay.hasPending(rawId)}`,
         );
 
         if (questionRelay.hasPending(rawId)) {

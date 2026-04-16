@@ -96,6 +96,32 @@ describe("EcsTaskTracker", () => {
     expect(tracker.all()).toEqual([]);
   });
 
+  it("indexes by teamsChannelId when task.teamsChannelId is set on register", () => {
+    const tracker = new EcsTaskTracker();
+    const task = makeTask("t-ch");
+    task.teamsChannelId = "19:venture@thread.tacv2";
+    tracker.register(task, "sess-ch");
+
+    const found = tracker.getByTeamsChannelId("19:venture@thread.tacv2");
+    expect(found?.task.taskId).toBe("t-ch");
+    expect(found?.teamsChannelId).toBe("19:venture@thread.tacv2");
+  });
+
+  it("getByTeamsChannelId returns undefined for unknown channel", () => {
+    const tracker = new EcsTaskTracker();
+    tracker.register(makeTask(), "sess-1");
+    expect(tracker.getByTeamsChannelId("19:nope@thread.tacv2")).toBeUndefined();
+  });
+
+  it("remove clears the teamsChannelId index", () => {
+    const tracker = new EcsTaskTracker();
+    const task = makeTask("t-ch");
+    task.teamsChannelId = "19:venture@thread.tacv2";
+    tracker.register(task, "sess-ch");
+    tracker.remove("t-ch");
+    expect(tracker.getByTeamsChannelId("19:venture@thread.tacv2")).toBeUndefined();
+  });
+
   it("tracks multiple tasks independently", () => {
     const tracker = new EcsTaskTracker();
     tracker.register(makeTask("t-1"), "s-1", undefined, "agent-a");

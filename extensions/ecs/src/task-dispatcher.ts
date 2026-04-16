@@ -152,9 +152,9 @@ export async function dispatchEcsTask(
 
     // Eagerly register the venture channel so isEcsChannel() recognizes
     // inbound messages even if the postTaskAssigned call below fails.
+    // (tracker.register already stores task.teamsChannelId on the active entry.)
     if (task.teamsChannelId && deps.teams) {
       deps.teams.registerChannel(task.teamsChannelId);
-      active.teamsChannelId = task.teamsChannelId;
     }
 
     // Register the control plane's Teams thread ID (from dispatch_payload)
