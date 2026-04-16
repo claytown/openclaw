@@ -95,6 +95,51 @@ export class EcsTaskTracker {
     return this.byTeamsMessageId.get(messageId.toLowerCase());
   }
 
+  /**
+   * Drop Teams thread indices for a task without removing the entry itself.
+   * Used when a thread is confirmed dead (Teams returns 404) so subsequent
+   * posts and thread lookups stop targeting it, but the session remains
+   * routable through other indices.
+   */
+  markDeadThread(taskId: string): void {
+    const active = this.byTaskId.get(taskId);
+    if (!active) {
+      return;
+    }
+    for (const key of active.teamsMessageIds ?? []) {
+      this.byTeamsMessageId.delete(key);
+    }
+    active.teamsMessageIds = [];
+    active.teamsMessageId = undefined;
+    console.log(
+      `[ecs-tracker] markDeadThread: taskId=${taskId} teamsIndex=${this.byTeamsMessageId.size}`,
+    );
+  }
+
+  /**
+   * Remove tracker entries that look stranded: started more than `maxAgeMs`
+   * ago AND with no `lastStatusUpdate` within `idleMs`. Returns the list of
+   * taskIds that were pruned.
+   */
+  pruneStale(opts: { maxAgeMs: number; idleMs: number; now?: number }): string[] {
+    const now = opts.now ?? Date.now();
+    const pruned: string[] = [];
+    // Snapshot into an array so we can mutate the map while iterating.
+    const snapshot = Array.from(this.byTaskId.values());
+    for (const active of snapshot) {
+      if (now - active.startedAt < opts.maxAgeMs) {
+        continue;
+      }
+      const lastUpdate = active.lastStatusUpdate ?? active.startedAt;
+      if (now - lastUpdate < opts.idleMs) {
+        continue;
+      }
+      this.remove(active.task.taskId);
+      pruned.push(active.task.taskId);
+    }
+    return pruned;
+  }
+
   remove(taskId: string): EcsActiveTask | undefined {
     const active = this.byTaskId.get(taskId);
     if (active) {

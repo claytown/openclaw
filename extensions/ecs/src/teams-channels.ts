@@ -153,11 +153,21 @@ function getKnownTeamsChannelIds(): Set<string> {
 
 // --- Main class ---
 
+export type TeamsDeadThreadInfo = {
+  channelId: string;
+  replyToId: string;
+};
+
+const THREAD_NOT_FOUND_MARKER = "ActivityNotFoundInConversation";
+const DEAD_THREAD_LOG_DEDUPE_MS = 5 * 60 * 1000;
+
 export class EcsTeamsChannels {
   private creds: TeamsCreds;
   private config: EcsTeamsConfig;
   private projectManager?: TeamsProjectChannelManager;
   private onPostCallback?: (info: TeamsPostInfo) => void;
+  private onDeadThreadCallback?: (info: TeamsDeadThreadInfo) => void;
+  private recentlyLoggedDeadThreads = new Map<string, number>();
 
   constructor(
     creds: TeamsCreds,
@@ -174,6 +184,15 @@ export class EcsTeamsChannels {
 
   setOnPost(cb: (info: TeamsPostInfo) => void): void {
     this.onPostCallback = cb;
+  }
+
+  /**
+   * Notified when Teams returns `ActivityNotFoundInConversation` for a thread
+   * reply. The caller typically clears the dead thread id from its index so
+   * subsequent posts don't keep failing against the same message.
+   */
+  setOnDeadThread(cb: (info: TeamsDeadThreadInfo) => void): void {
+    this.onDeadThreadCallback = cb;
   }
 
   /** Eagerly register a channel ID so isEcsChannel() recognizes it. */
@@ -229,8 +248,59 @@ export class EcsTeamsChannels {
       }
       return { messageId: result.id, channelId };
     } catch (err) {
-      console.warn(`[ecs-teams] post failed: ${err instanceof Error ? err.message : String(err)}`);
+      const message = err instanceof Error ? err.message : String(err);
+      if (replyToId && message.includes(THREAD_NOT_FOUND_MARKER)) {
+        this.handleDeadThread(channelId, replyToId, message);
+        // Retry once as a root post so the status update still lands in the channel.
+        try {
+          const result = await botSend(this.creds, channelId, text);
+          getKnownTeamsChannelIds().add(channelId);
+          if (this.onPostCallback) {
+            this.onPostCallback({
+              channelId,
+              messageId: result.id,
+              title,
+              content: text,
+            });
+          }
+          return { messageId: result.id, channelId };
+        } catch (retryErr) {
+          const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+          console.warn(`[ecs-teams] root-post retry failed: ${retryMsg}`);
+          return {};
+        }
+      }
+      console.warn(`[ecs-teams] post failed: ${message}`);
       return {};
+    }
+  }
+
+  private handleDeadThread(channelId: string, replyToId: string, details: string): void {
+    const now = Date.now();
+    const lastLogged = this.recentlyLoggedDeadThreads.get(replyToId);
+    if (lastLogged === undefined || now - lastLogged > DEAD_THREAD_LOG_DEDUPE_MS) {
+      console.info(
+        `[ecs-teams] thread ${replyToId} is no longer available; posting as root instead (${details})`,
+      );
+      this.recentlyLoggedDeadThreads.set(replyToId, now);
+      if (this.recentlyLoggedDeadThreads.size > 128) {
+        // Trim oldest entries to keep the dedupe map bounded.
+        const cutoff = now - DEAD_THREAD_LOG_DEDUPE_MS;
+        for (const [id, ts] of this.recentlyLoggedDeadThreads) {
+          if (ts < cutoff) {
+            this.recentlyLoggedDeadThreads.delete(id);
+          }
+        }
+      }
+    }
+    if (this.onDeadThreadCallback) {
+      try {
+        this.onDeadThreadCallback({ channelId, replyToId });
+      } catch (cbErr) {
+        console.warn(
+          `[ecs-teams] onDeadThread callback failed: ${cbErr instanceof Error ? cbErr.message : String(cbErr)}`,
+        );
+      }
     }
   }
 

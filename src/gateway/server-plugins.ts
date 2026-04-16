@@ -354,6 +354,24 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       }
       return { runId };
     },
+    async queueMessage(params) {
+      const payload = await dispatchGatewayMethod<{ queued?: unknown; reason?: unknown }>(
+        "agent.queueMessage",
+        {
+          sessionKey: params.sessionKey,
+          message: params.message,
+        },
+      );
+      const queued = payload?.queued === true;
+      const reasonRaw = payload?.reason;
+      const reason =
+        reasonRaw === "no_active_run" || reasonRaw === "not_streaming" || reasonRaw === "compacting"
+          ? reasonRaw
+          : queued
+            ? undefined
+            : "unknown";
+      return queued ? { queued: true } : { queued: false, reason };
+    },
     async waitForRun(params) {
       const payload = await dispatchGatewayMethod<{ status?: string; error?: string }>(
         "agent.wait",

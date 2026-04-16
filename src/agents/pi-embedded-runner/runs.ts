@@ -96,28 +96,41 @@ function clearActiveRunSessionKeys(sessionId: string, sessionKey?: string): void
   }
 }
 
-export function queueEmbeddedPiMessage(sessionId: string, text: string): boolean {
+export type QueueEmbeddedPiMessageFailureReason = "no_active_run" | "not_streaming" | "compacting";
+
+export type QueueEmbeddedPiMessageOutcome =
+  | { queued: true }
+  | { queued: false; reason: QueueEmbeddedPiMessageFailureReason };
+
+export function queueEmbeddedPiMessageDetailed(
+  sessionId: string,
+  text: string,
+): QueueEmbeddedPiMessageOutcome {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (!handle) {
     const queuedReplyRunMessage = queueReplyRunMessage(sessionId, text);
     if (queuedReplyRunMessage) {
       logMessageQueued({ sessionId, source: "pi-embedded-runner" });
-      return true;
+      return { queued: true };
     }
     diag.debug(`queue message failed: sessionId=${sessionId} reason=no_active_run`);
-    return false;
+    return { queued: false, reason: "no_active_run" };
   }
   if (!handle.isStreaming()) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=not_streaming`);
-    return false;
+    return { queued: false, reason: "not_streaming" };
   }
   if (handle.isCompacting()) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=compacting`);
-    return false;
+    return { queued: false, reason: "compacting" };
   }
   logMessageQueued({ sessionId, source: "pi-embedded-runner" });
   void handle.queueMessage(text);
-  return true;
+  return { queued: true };
+}
+
+export function queueEmbeddedPiMessage(sessionId: string, text: string): boolean {
+  return queueEmbeddedPiMessageDetailed(sessionId, text).queued;
 }
 
 /**

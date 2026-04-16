@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => ({
   performGatewaySessionReset: vi.fn(),
   getLatestSubagentRunByChildSessionKey: vi.fn(),
   replaceSubagentRunAfterSteer: vi.fn(),
+  resolveActiveEmbeddedRunSessionId: vi.fn(),
+  queueEmbeddedPiMessageDetailed: vi.fn(),
   loadConfigReturn: {} as Record<string, unknown>,
 }));
 
@@ -67,6 +69,12 @@ vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: () => ["main"],
   resolveAgentWorkspaceDir: (cfg: { agents?: { defaults?: { workspace?: string } } }) =>
     cfg?.agents?.defaults?.workspace ?? "/tmp/workspace",
+}));
+
+vi.mock("../../agents/pi-embedded-runner/runs.js", () => ({
+  resolveActiveEmbeddedRunSessionId: (key: string) => mocks.resolveActiveEmbeddedRunSessionId(key),
+  queueEmbeddedPiMessageDetailed: (sessionId: string, text: string) =>
+    mocks.queueEmbeddedPiMessageDetailed(sessionId, text),
 }));
 
 vi.mock("../../infra/agent-events.js", () => ({
@@ -1191,5 +1199,61 @@ describe("gateway agent handler", () => {
         message: expect.stringContaining("malformed session key"),
       }),
     );
+  });
+});
+
+describe("gateway agent.queueMessage handler", () => {
+  afterEach(() => {
+    mocks.resolveActiveEmbeddedRunSessionId.mockReset();
+    mocks.queueEmbeddedPiMessageDetailed.mockReset();
+  });
+
+  it("returns queued:true when the session has an active streaming run", async () => {
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("session-id-1");
+    mocks.queueEmbeddedPiMessageDetailed.mockReturnValue({ queued: true });
+    const respond = vi.fn();
+    await agentHandlers["agent.queueMessage"]({
+      params: { sessionKey: "coding-ecs-56", message: "hi" },
+      respond: respond as never,
+      context: makeContext(),
+      req: { type: "req", id: "qm-1", method: "agent.queueMessage" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+    expect(respond).toHaveBeenCalledWith(true, { queued: true });
+    expect(mocks.queueEmbeddedPiMessageDetailed).toHaveBeenCalledWith("session-id-1", "hi");
+  });
+
+  it("returns queued:false reason=no_active_run when nothing is running", async () => {
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
+    const respond = vi.fn();
+    await agentHandlers["agent.queueMessage"]({
+      params: { sessionKey: "coding-ecs-56", message: "hi" },
+      respond: respond as never,
+      context: makeContext(),
+      req: { type: "req", id: "qm-2", method: "agent.queueMessage" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+    expect(respond).toHaveBeenCalledWith(true, { queued: false, reason: "no_active_run" });
+    expect(mocks.queueEmbeddedPiMessageDetailed).not.toHaveBeenCalled();
+  });
+
+  it("propagates the queue-failure reason from the runner", async () => {
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("session-id-1");
+    mocks.queueEmbeddedPiMessageDetailed.mockReturnValue({
+      queued: false,
+      reason: "not_streaming",
+    });
+    const respond = vi.fn();
+    await agentHandlers["agent.queueMessage"]({
+      params: { sessionKey: "coding-ecs-56", message: "hi" },
+      respond: respond as never,
+      context: makeContext(),
+      req: { type: "req", id: "qm-3", method: "agent.queueMessage" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+    expect(respond).toHaveBeenCalledWith(true, { queued: false, reason: "not_streaming" });
   });
 });

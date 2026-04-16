@@ -187,6 +187,27 @@ export const AgentWaitParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const AgentQueueMessageParamsSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    message: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const AgentQueueMessageResultSchema = Type.Object(
+  {
+    queued: Type.Boolean(),
+    reason: Type.Optional(
+      Type.Unsafe<"no_active_run" | "not_streaming" | "compacting" | "unknown">({
+        type: "string",
+        enum: ["no_active_run", "not_streaming", "compacting", "unknown"],
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
+
 export const WakeParamsSchema = Type.Object(
   {
     mode: Type.Union([Type.Literal("now"), Type.Literal("next-heartbeat")]),

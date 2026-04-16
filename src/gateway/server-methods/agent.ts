@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import {
+  queueEmbeddedPiMessageDetailed,
+  resolveActiveEmbeddedRunSessionId,
+} from "../../agents/pi-embedded-runner/runs.js";
+import {
   normalizeSpawnedRunMetadata,
   resolveIngressWorkspaceOverrideForSpawnedRun,
 } from "../../agents/spawned-context.js";
@@ -60,6 +64,7 @@ import {
   formatValidationErrors,
   validateAgentIdentityParams,
   validateAgentParams,
+  validateAgentQueueMessageParams,
   validateAgentWaitParams,
 } from "../protocol/index.js";
 import { performGatewaySessionReset } from "../session-reset-service.js";
@@ -948,6 +953,34 @@ export const agentHandlers: GatewayRequestHandlers = {
         basePath: cfg.gateway?.controlUi?.basePath,
       }) ?? identity.avatar;
     respond(true, { ...identity, avatar: avatarValue }, undefined);
+  },
+  "agent.queueMessage": ({ params, respond }) => {
+    if (!validateAgentQueueMessageParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid agent.queueMessage params: ${formatValidationErrors(
+            validateAgentQueueMessageParams.errors,
+          )}`,
+        ),
+      );
+      return;
+    }
+    const sessionKey = params.sessionKey;
+    const message = params.message;
+    const sessionId = resolveActiveEmbeddedRunSessionId(sessionKey);
+    if (!sessionId) {
+      respond(true, { queued: false, reason: "no_active_run" });
+      return;
+    }
+    const outcome = queueEmbeddedPiMessageDetailed(sessionId, message);
+    if (outcome.queued) {
+      respond(true, { queued: true });
+      return;
+    }
+    respond(true, { queued: false, reason: outcome.reason });
   },
   "agent.wait": async ({ params, respond, context }) => {
     if (!validateAgentWaitParams(params)) {

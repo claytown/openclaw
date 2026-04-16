@@ -67,6 +67,7 @@ function createMockApi(pluginConfig: Record<string, unknown>): {
       subagent: {
         run: vi.fn().mockResolvedValue({ runId: "run-1" }),
         waitForRun: vi.fn().mockResolvedValue({ status: "ok" }),
+        queueMessage: vi.fn().mockResolvedValue({ queued: true }),
         getSessionMessages: vi.fn().mockResolvedValue({ messages: [] }),
         deleteSession: vi.fn(),
       },

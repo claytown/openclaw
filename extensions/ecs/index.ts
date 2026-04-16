@@ -180,6 +180,15 @@ const ecsPlugin = {
           .catch((err) => log.warn(`[ecs] teams-post callback failed: ${err}`));
       });
 
+      // When Teams reports a thread is gone, drop its index from the tracker
+      // so subsequent posts don't keep targeting it.
+      teams.setOnDeadThread((info) => {
+        const active = tracker.getByTeamsMessageId(info.replyToId);
+        if (active) {
+          tracker.markDeadThread(active.task.taskId);
+        }
+      });
+
       log.info(`[ecs] Teams configured (team: ${teamsCfg.teamId})`);
     }
 
@@ -190,6 +199,22 @@ const ecsPlugin = {
       defaultTimeoutMs: agentsConfig.questionTimeoutMs,
       escalateOnTimeout: agentsConfig.questionEscalateOnTimeout,
     });
+
+    // Sweep stale tracker entries so abandoned tasks don't accumulate Teams
+    // thread indices that later 404 on status-update posts.
+    const sweeperInterval = setInterval(
+      () => {
+        const pruned = tracker.pruneStale({
+          maxAgeMs: 24 * 60 * 60 * 1000,
+          idleMs: 60 * 60 * 1000,
+        });
+        if (pruned.length > 0) {
+          log.info(`[ecs] sweeper pruned ${pruned.length} stale task(s): ${pruned.join(", ")}`);
+        }
+      },
+      15 * 60 * 1000,
+    );
+    sweeperInterval.unref?.();
 
     // --- HTTP route: /ecs/* ---
     const apiHandler = createEcsApiHandler({
@@ -382,9 +407,47 @@ const ecsPlugin = {
             `[ecs] forwarding thread reply to agent session ${activeTask.sessionKey} (task ${activeTask.task.taskId}, from ${sender})`,
           );
           const msg = `[Teams thread reply from ${sender}]\n${event.content}\n\nIMPORTANT: Use the ecs_thread_reply tool to respond to this message. The human is waiting for a reply in the task thread.`;
-          api.runtime.subagent
-            .run({ sessionKey: activeTask.sessionKey, message: msg, deliver: false })
-            .catch((err) => log.warn(`[ecs] failed to forward thread reply to agent: ${err}`));
+
+          // Prefer queueing into the active run so the next LLM turn picks up
+          // the reply. Fall back to `run` only when no streaming run is active;
+          // a fresh dispatch serializes on the session write lock.
+          void (async () => {
+            try {
+              const outcome = await api.runtime.subagent.queueMessage({
+                sessionKey: activeTask.sessionKey,
+                message: msg,
+              });
+              if (outcome.queued) {
+                log.info(
+                  `[ecs] queued message into active session via subagent.queueMessage (session ${activeTask.sessionKey})`,
+                );
+                return;
+              }
+              log.info(
+                `[ecs] subagent.queueMessage not queued (reason=${outcome.reason ?? "unknown"}); falling back to subagent.run for session ${activeTask.sessionKey}`,
+              );
+              await api.runtime.subagent.run({
+                sessionKey: activeTask.sessionKey,
+                message: msg,
+                deliver: false,
+              });
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              log.warn(`[ecs] failed to forward thread reply to agent: ${msg}`);
+            }
+          })();
+
+          // Immediate thread ACK so the human sees the message landed even if
+          // the agent's reply is delayed by lock contention or a long turn.
+          if (teams && activeTask.teamsMessageId) {
+            void teams
+              .postReplyToThread(
+                "_Got it — working on a reply._",
+                activeTask.task.projectId,
+                activeTask.teamsMessageId,
+              )
+              .catch((err) => log.warn(`[ecs] thread ack post failed: ${err}`));
+          }
           return { handled: true };
         }
 
