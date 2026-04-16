@@ -194,10 +194,11 @@ const ecsPlugin = {
           .catch((err) => log.warn(`[ecs] teams-post callback failed: ${err}`));
       });
 
-      // When Teams reports a thread is gone, drop its index from the tracker
-      // so subsequent posts don't keep targeting it.
+      // When Teams reports a thread is gone, flag it so outbound replies stop
+      // targeting it. Inbound routing by thread id is intentionally preserved
+      // so human replies still reach the running session.
       teams.setOnDeadThread((info) => {
-        const active = tracker.getByTeamsMessageId(info.replyToId);
+        const active = tracker.findByTeamsThread(info.replyToId);
         if (active) {
           tracker.markDeadThread(active.task.taskId);
         }
@@ -459,8 +460,19 @@ const ecsPlugin = {
           return undefined;
         }
 
+        const lookupKey = threadId.toLowerCase();
+        const activeMatch = tracker.findByTeamsThread(threadId);
+        const trackerMatch = !!activeMatch;
+        const teamsIndex = tracker.teamsIndexSize();
+        // On a miss, dump a small sample of indexed keys so we can tell
+        // "index was wiped" (size 0) from "key mismatch" (size > 0, our key
+        // absent) without chasing partial logs.
+        const teamsSample =
+          trackerMatch || teamsIndex === 0
+            ? ""
+            : ` teamsSample=${JSON.stringify(tracker.teamsIndexSampleKeys(5))}`;
         log.info(
-          `[ecs] before_dispatch: sessionKey=${sessionKey} threadId=${threadId} hasPending=${questionRelay.hasPending(threadId)} trackerMatch=${!!tracker.getByTeamsMessageId(threadId)} trackerSize=${tracker.size()}`,
+          `[ecs] before_dispatch: sessionKey=${sessionKey} threadId=${threadId} lookupKey=${lookupKey} hasPending=${questionRelay.hasPending(threadId)} trackerMatch=${trackerMatch} trackerSize=${tracker.size()} teamsIndex=${teamsIndex}${teamsSample}`,
         );
 
         // Path 1: pending question — resolve it.
@@ -475,7 +487,7 @@ const ecsPlugin = {
 
         // Path 2: active task whose Teams thread matches — forward the
         // human's message to the agent session so it has context.
-        const activeTask = tracker.getByTeamsMessageId(threadId);
+        const activeTask = activeMatch;
         if (activeTask) {
           const sender = event.senderId ?? ctx.senderId ?? "unknown";
           log.info(
@@ -514,7 +526,10 @@ const ecsPlugin = {
 
           // Immediate thread ACK so the human sees the message landed even if
           // the agent's reply is delayed by lock contention or a long turn.
-          if (teams && activeTask.teamsMessageId) {
+          // Skip when the thread has been flagged dead for outbound posts —
+          // replying to a dead thread would just 404 again. The agent's own
+          // reply will land through whatever outbound path still works.
+          if (teams && activeTask.teamsMessageId && !activeTask.teamsThreadIsDead) {
             void teams
               .postReplyToThread(
                 "_Got it — working on a reply._",

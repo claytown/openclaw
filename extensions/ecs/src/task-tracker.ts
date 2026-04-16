@@ -4,13 +4,17 @@
 import type { EcsActiveTask, EcsTask, EcsTaskStatus } from "./types.js";
 
 const TRACKER_KEY = Symbol.for("openclaw.ecsTaskTracker");
-type TrackerHolder = { instance: EcsTaskTracker };
+type TrackerHolder = { instance: EcsTaskTracker; instanceId: string };
 
 /** Return the process-wide singleton tracker. */
 export function getEcsTaskTracker(): EcsTaskTracker {
   const g = globalThis as typeof globalThis & { [TRACKER_KEY]?: TrackerHolder };
   if (!g[TRACKER_KEY]) {
-    g[TRACKER_KEY] = { instance: new EcsTaskTracker() };
+    const instanceId = Math.random().toString(36).slice(2, 10);
+    g[TRACKER_KEY] = { instance: new EcsTaskTracker(), instanceId };
+    // One line per process confirms the in-process singleton is truly singular.
+    // If this fires more than once per pid, something is bypassing globalThis.
+    console.log(`[ecs-tracker] getEcsTaskTracker: pid=${process.pid} instanceId=${instanceId}`);
   }
   return g[TRACKER_KEY].instance;
 }
@@ -83,6 +87,10 @@ export class EcsTaskTracker {
     const active = this.byTaskId.get(taskId);
     if (active) {
       active.teamsMessageId = messageId;
+      // A new root thread id supersedes any prior "dead" marking: inbound
+      // routing might have been flagged dead because of an earlier stale id,
+      // but this one is freshly minted.
+      active.teamsThreadIsDead = false;
       const key = messageId.toLowerCase();
       // Store under the lowercased key so lookups from the session key
       // (which is lowercased by resolveThreadSessionKeys) always match.
@@ -95,7 +103,7 @@ export class EcsTaskTracker {
         active.teamsMessageIds.push(key);
       }
       console.log(
-        `[ecs-tracker] setTeamsMessage: taskId=${taskId} messageId=${messageId} teamsIndex=${this.byTeamsMessageId.size} keysForTask=${active.teamsMessageIds.length}`,
+        `[ecs-tracker] setTeamsMessage: taskId=${taskId} messageId=${messageId} storedKey=${key} teamsIndex=${this.byTeamsMessageId.size} keysForTask=${active.teamsMessageIds.length}`,
       );
     }
   }
@@ -105,23 +113,53 @@ export class EcsTaskTracker {
   }
 
   /**
-   * Drop Teams thread indices for a task without removing the entry itself.
-   * Used when a thread is confirmed dead (Teams returns 404) so subsequent
-   * posts and thread lookups stop targeting it, but the session remains
-   * routable through other indices.
+   * Resolve an active task from a Teams thread id pulled off a session key.
+   * Thin wrapper over getByTeamsMessageId that matches how before_dispatch
+   * thinks about the lookup ("find the task whose thread this is").
+   */
+  findByTeamsThread(threadId: string): EcsActiveTask | undefined {
+    return this.getByTeamsMessageId(threadId);
+  }
+
+  /** Count of byTeamsMessageId entries. Used for diagnostics, not routing. */
+  teamsIndexSize(): number {
+    return this.byTeamsMessageId.size;
+  }
+
+  /**
+   * Return up to `limit` keys currently indexed for Teams thread routing.
+   * Used by the before_dispatch log when a lookup misses, to distinguish
+   * "index was wiped" from "index has a different key than we looked up for".
+   */
+  teamsIndexSampleKeys(limit: number): string[] {
+    const out: string[] = [];
+    for (const key of this.byTeamsMessageId.keys()) {
+      if (out.length >= limit) {
+        break;
+      }
+      out.push(key);
+    }
+    return out;
+  }
+
+  /**
+   * Flag a Teams thread as unusable for outbound replies. The inbound index
+   * (byTeamsMessageId) is left intact so a human reply in the same thread
+   * still resolves to this task — otherwise a dead outbound thread would
+   * silently break thread-based task routing on the inbound side.
+   *
+   * Outbound helpers should consult `active.teamsThreadIsDead` / the cleared
+   * `teamsMessageId` to decide whether to skip or fall back to a root post.
    */
   markDeadThread(taskId: string): void {
     const active = this.byTaskId.get(taskId);
     if (!active) {
       return;
     }
-    for (const key of active.teamsMessageIds ?? []) {
-      this.byTeamsMessageId.delete(key);
-    }
-    active.teamsMessageIds = [];
+    active.teamsThreadIsDead = true;
     active.teamsMessageId = undefined;
     console.log(
-      `[ecs-tracker] markDeadThread: taskId=${taskId} teamsIndex=${this.byTeamsMessageId.size}`,
+      `[ecs-tracker] markDeadThread: taskId=${taskId} markedDead=true teamsIndex=${this.byTeamsMessageId.size} (inbound routing preserved)`,
     );
   }
 

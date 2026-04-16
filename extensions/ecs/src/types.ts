@@ -94,6 +94,12 @@ export type EcsActiveTask = {
   teamsChannelId?: string;
   /** All Teams thread/message IDs indexed for this task (for cleanup). */
   teamsMessageIds?: string[];
+  /**
+   * Outbound replies to this Teams thread have returned 404. Inbound lookups
+   * still resolve to this task so human replies keep routing, but outbound
+   * helpers should fall back to root posts or skip thread acks.
+   */
+  teamsThreadIsDead?: boolean;
   startedAt: number;
   lastStatusUpdate?: number;
 };

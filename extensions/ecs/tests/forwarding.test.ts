@@ -208,4 +208,37 @@ describe("ECS before_dispatch forwarding", () => {
     expect(queueMessage).toHaveBeenCalledTimes(1);
     expect(run).toHaveBeenCalledWith(expect.objectContaining({ sessionKey, deliver: false }));
   });
+
+  it("still forwards when the thread has been flagged dead, and skips the Teams ACK", async () => {
+    // Simulate an outbound 404 that flipped the tracker's dead-thread flag.
+    // Inbound routing must still resolve so the human reply reaches the agent.
+    getEcsTaskTracker().markDeadThread(taskId);
+
+    const { api, hooks, queueMessage } = createApi(makeConfig());
+    queueMessage.mockResolvedValue({ queued: true });
+
+    ecsPlugin.register(api);
+    const hook = hooks.find((h) => h.hookName === "before_dispatch");
+
+    const result = await hook!.handler(
+      { content: "still there?", senderId: "human@example.com" } as never,
+      { sessionKey: `agent:main:msteams:default:thread:${threadId}` } as never,
+    );
+    expect(result).toEqual({ handled: true });
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(queueMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        message: expect.stringContaining("still there?"),
+      }),
+    );
+
+    const teamsMocks = (await import("../src/teams-channels.js")) as unknown as {
+      __mocks: { postReplyToThread: ReturnType<typeof vi.fn> };
+    };
+    // Posting to a known-dead thread would 404 again — suppress it.
+    expect(teamsMocks.__mocks.postReplyToThread).not.toHaveBeenCalled();
+  });
 });

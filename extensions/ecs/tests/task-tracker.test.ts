@@ -122,6 +122,74 @@ describe("EcsTaskTracker", () => {
     expect(tracker.getByTeamsChannelId("19:venture@thread.tacv2")).toBeUndefined();
   });
 
+  it("findByTeamsThread resolves to the same task as setTeamsMessage", () => {
+    const tracker = new EcsTaskTracker();
+    tracker.register(makeTask("t-thread"), "sess-thread");
+    tracker.setTeamsMessage("t-thread", "1776371195088");
+
+    const found = tracker.findByTeamsThread("1776371195088");
+    expect(found?.task.taskId).toBe("t-thread");
+    expect(tracker.teamsIndexSize()).toBe(1);
+  });
+
+  it("findByTeamsThread matches case-insensitively (session keys are lowercased)", () => {
+    const tracker = new EcsTaskTracker();
+    tracker.register(makeTask("t-thread"), "sess-thread");
+    tracker.setTeamsMessage("t-thread", "AbC123");
+
+    expect(tracker.findByTeamsThread("abc123")?.task.taskId).toBe("t-thread");
+    expect(tracker.findByTeamsThread("ABC123")?.task.taskId).toBe("t-thread");
+  });
+
+  it("markDeadThread preserves inbound routing so human replies still match", () => {
+    const tracker = new EcsTaskTracker();
+    tracker.register(makeTask("t-66"), "coding-ecs-66");
+    tracker.setTeamsMessage("t-66", "1776371195088");
+
+    expect(tracker.teamsIndexSize()).toBe(1);
+    tracker.markDeadThread("t-66");
+
+    // Inbound routing must remain intact — this is the whole point of the
+    // fix. markDeadThread only stops outbound posts; it must not silently
+    // break thread-based routing on the inbound side.
+    const active = tracker.findByTeamsThread("1776371195088");
+    expect(active?.task.taskId).toBe("t-66");
+    expect(active?.teamsThreadIsDead).toBe(true);
+    // And outbound helpers should see a cleared teamsMessageId so they fall
+    // back to root posts instead of targeting the dead thread.
+    expect(active?.teamsMessageId).toBeUndefined();
+    expect(tracker.teamsIndexSize()).toBe(1);
+  });
+
+  it("setTeamsMessage with a fresh id clears the dead flag", () => {
+    const tracker = new EcsTaskTracker();
+    tracker.register(makeTask("t-66"), "coding-ecs-66");
+    tracker.setTeamsMessage("t-66", "dead-id");
+    tracker.markDeadThread("t-66");
+    expect(tracker.findByTeamsThread("dead-id")?.teamsThreadIsDead).toBe(true);
+
+    tracker.setTeamsMessage("t-66", "fresh-id");
+    const active = tracker.findByTeamsThread("fresh-id");
+    expect(active?.teamsThreadIsDead).toBe(false);
+    expect(active?.teamsMessageId).toBe("fresh-id");
+  });
+
+  it("teamsIndexSampleKeys returns up to N stored keys for diagnostics", () => {
+    const tracker = new EcsTaskTracker();
+    tracker.register(makeTask("t-1"), "s-1");
+    tracker.register(makeTask("t-2"), "s-2");
+    tracker.register(makeTask("t-3"), "s-3");
+    tracker.setTeamsMessage("t-1", "ID-1");
+    tracker.setTeamsMessage("t-2", "ID-2");
+    tracker.setTeamsMessage("t-3", "ID-3");
+
+    const sample = tracker.teamsIndexSampleKeys(2);
+    expect(sample).toHaveLength(2);
+    for (const key of sample) {
+      expect(["id-1", "id-2", "id-3"]).toContain(key);
+    }
+  });
+
   it("tracks multiple tasks independently", () => {
     const tracker = new EcsTaskTracker();
     tracker.register(makeTask("t-1"), "s-1", undefined, "agent-a");
