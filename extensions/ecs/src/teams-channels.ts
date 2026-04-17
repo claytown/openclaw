@@ -60,12 +60,27 @@ async function getBotToken(creds: TeamsCreds): Promise<string> {
 
 // --- Bot Framework send ---
 
+/**
+ * Shape of a Bot Framework activity response. Only `id` is guaranteed; Teams
+ * may also populate `channelData.teamsMessageId` and related fields that serve
+ * as alternate selectors for later thread replies.
+ */
+export type BotFrameworkActivityResponse = {
+  id: string;
+  channelData?: {
+    teamsMessageId?: string;
+    messageid?: string;
+    [k: string]: unknown;
+  };
+  [k: string]: unknown;
+};
+
 async function botSend(
   creds: TeamsCreds,
   conversationId: string,
   text: string,
   replyToId?: string,
-): Promise<{ id: string }> {
+): Promise<BotFrameworkActivityResponse> {
   const token = await getBotToken(creds);
   const base = creds.serviceUrl.replace(/\/$/, "");
 
@@ -86,6 +101,7 @@ async function botSend(
   if (replyToId) {
     activity.replyToId = replyToId;
   }
+  const bodyStr = JSON.stringify(activity);
 
   const res = await fetch(url, {
     method: "POST",
@@ -93,7 +109,7 @@ async function botSend(
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(activity),
+    body: bodyStr,
   });
 
   if (res.status === 429) {
@@ -104,10 +120,40 @@ async function botSend(
 
   const respText = await res.text();
   if (!res.ok) {
+    // Log enough to diagnose 404 ActivityNotFoundInConversation vs. perms vs.
+    // bad payload without chasing partial logs. Body is the activity we sent
+    // (token is NOT in the body — it's in the Authorization header above).
+    console.warn(
+      `[ecs-teams] botSend non-OK: status=${res.status} url=${url} replyToId=${replyToId ?? "<none>"} reqBody=${bodyStr} respBody=${respText}`,
+    );
     throw new Error(`Bot Framework send ${res.status}: ${respText}`);
   }
 
-  return JSON.parse(respText) as { id: string };
+  return JSON.parse(respText) as BotFrameworkActivityResponse;
+}
+
+/**
+ * Given a Bot Framework POST response, collect selector candidates Teams
+ * might accept as `replyToId` on later replies. Ordered from "most likely
+ * correct" to "least": channelData.teamsMessageId first (if Teams populated
+ * it), channelData.messageid second, then the top-level activity id.
+ */
+function collectReplyCandidates(
+  resp: BotFrameworkActivityResponse,
+): Array<{ via: string; value: string }> {
+  const out: Array<{ via: string; value: string }> = [];
+  const tmid = resp.channelData?.teamsMessageId;
+  if (typeof tmid === "string" && tmid.length > 0) {
+    out.push({ via: "channelData.teamsMessageId", value: tmid });
+  }
+  const cmid = resp.channelData?.messageid;
+  if (typeof cmid === "string" && cmid.length > 0) {
+    out.push({ via: "channelData.messageid", value: cmid });
+  }
+  if (typeof resp.id === "string" && resp.id.length > 0) {
+    out.push({ via: "id", value: resp.id });
+  }
+  return out;
 }
 
 // --- Helpers ---
@@ -159,6 +205,12 @@ export type TeamsDeadThreadInfo = {
   replyToId: string;
 };
 
+export type TeamsRootFallbackInfo = {
+  channelId: string;
+  replyToId: string;
+  newMessageId: string;
+};
+
 const THREAD_NOT_FOUND_MARKER = "ActivityNotFoundInConversation";
 const DEAD_THREAD_LOG_DEDUPE_MS = 5 * 60 * 1000;
 
@@ -168,7 +220,13 @@ export class EcsTeamsChannels {
   private projectManager?: TeamsProjectChannelManager;
   private onPostCallback?: (info: TeamsPostInfo) => void;
   private onDeadThreadCallback?: (info: TeamsDeadThreadInfo) => void;
+  private onRootFallbackCallback?: (info: TeamsRootFallbackInfo) => void;
   private recentlyLoggedDeadThreads = new Map<string, number>();
+  // Per-thread-root alternate id list harvested from Bot Framework POST
+  // responses. On a reply 404, we walk these in order before declaring the
+  // thread dead. Bounded to the N most recent roots so memory stays flat.
+  private replyCandidatesByPrimary = new Map<string, string[]>();
+  private static REPLY_CANDIDATES_MAX_ENTRIES = 256;
 
   constructor(
     creds: TeamsCreds,
@@ -194,6 +252,15 @@ export class EcsTeamsChannels {
    */
   setOnDeadThread(cb: (info: TeamsDeadThreadInfo) => void): void {
     this.onDeadThreadCallback = cb;
+  }
+
+  /**
+   * Notified after a 404-triggered root-post fallback successfully creates a
+   * new thread root. The caller typically re-indexes the new messageId against
+   * the same task so inbound replies to the fresh thread route correctly.
+   */
+  setOnRootFallback(cb: (info: TeamsRootFallbackInfo) => void): void {
+    this.onRootFallbackCallback = cb;
   }
 
   /** Eagerly register a channel ID so isEcsChannel() recognizes it. */
@@ -228,6 +295,28 @@ export class EcsTeamsChannels {
     return this.config.defaultChannel;
   }
 
+  /**
+   * Cache the alternate reply selectors that Bot Framework returned alongside
+   * the activity we just posted. On a later 404 against `primary`, we walk
+   * these alternates in order before declaring the thread dead.
+   */
+  private rememberReplyCandidates(primary: string, resp: BotFrameworkActivityResponse): void {
+    const alternates = collectReplyCandidates(resp)
+      .filter((c) => c.value !== primary)
+      .map((c) => c.value);
+    if (alternates.length === 0) {
+      return;
+    }
+    this.replyCandidatesByPrimary.set(primary, alternates);
+    if (this.replyCandidatesByPrimary.size > EcsTeamsChannels.REPLY_CANDIDATES_MAX_ENTRIES) {
+      // Evict the oldest entry (Map preserves insertion order) to cap memory.
+      const firstKey = this.replyCandidatesByPrimary.keys().next().value;
+      if (firstKey !== undefined) {
+        this.replyCandidatesByPrimary.delete(firstKey);
+      }
+    }
+  }
+
   private async post(
     channelId: string,
     text: string,
@@ -239,6 +328,7 @@ export class EcsTeamsChannels {
       // Dynamically register any channel we successfully post to so
       // isEcsChannel() recognizes project/venture channels across all instances.
       getKnownTeamsChannelIds().add(channelId);
+      this.rememberReplyCandidates(result.id, result);
       if (this.onPostCallback) {
         this.onPostCallback({
           channelId,
@@ -251,11 +341,39 @@ export class EcsTeamsChannels {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (replyToId && message.includes(THREAD_NOT_FOUND_MARKER)) {
+        // Retry ladder: before declaring the thread dead, try any alternate
+        // selectors Teams returned in channelData when we first posted the
+        // root. If one works, log which shape won so we can pin it later.
+        const alternates = this.replyCandidatesByPrimary.get(replyToId) ?? [];
+        for (const alt of alternates) {
+          try {
+            const altResult = await botSend(this.creds, channelId, text, alt);
+            console.info(`[ecs-teams] reply ok via alternate=${alt} (primary=${replyToId} 404'd)`);
+            getKnownTeamsChannelIds().add(channelId);
+            this.rememberReplyCandidates(altResult.id, altResult);
+            if (this.onPostCallback) {
+              this.onPostCallback({
+                channelId,
+                messageId: altResult.id,
+                title,
+                content: text,
+              });
+            }
+            return { messageId: altResult.id, channelId };
+          } catch (altErr) {
+            const altMsg = altErr instanceof Error ? altErr.message : String(altErr);
+            console.warn(
+              `[ecs-teams] alternate=${alt} also failed for replyToId=${replyToId}: ${altMsg}`,
+            );
+          }
+        }
+
         this.handleDeadThread(channelId, replyToId, message);
         // Retry once as a root post so the status update still lands in the channel.
         try {
           const result = await botSend(this.creds, channelId, text);
           getKnownTeamsChannelIds().add(channelId);
+          this.rememberReplyCandidates(result.id, result);
           if (this.onPostCallback) {
             this.onPostCallback({
               channelId,
@@ -263,6 +381,19 @@ export class EcsTeamsChannels {
               title,
               content: text,
             });
+          }
+          if (this.onRootFallbackCallback) {
+            try {
+              this.onRootFallbackCallback({
+                channelId,
+                replyToId,
+                newMessageId: result.id,
+              });
+            } catch (cbErr) {
+              console.warn(
+                `[ecs-teams] onRootFallback callback failed: ${cbErr instanceof Error ? cbErr.message : String(cbErr)}`,
+              );
+            }
           }
           return { messageId: result.id, channelId };
         } catch (retryErr) {

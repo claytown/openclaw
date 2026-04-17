@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import {
+  listActiveRunSessionKeys,
   queueEmbeddedPiMessageDetailed,
   resolveActiveEmbeddedRunSessionId,
 } from "../../agents/pi-embedded-runner/runs.js";
@@ -977,20 +978,28 @@ export const agentHandlers: GatewayRequestHandlers = {
     // Plugins that kept the raw form (e.g. `<agent>-ecs-<taskId>`) must resolve
     // against either shape, so try the raw key first and fall back to the
     // canonical one.
-    let sessionId = resolveActiveEmbeddedRunSessionId(sessionKey);
+    const rawSessionId = resolveActiveEmbeddedRunSessionId(sessionKey);
+    let sessionId = rawSessionId;
+    let canonical: string | undefined;
+    let canonicalSessionId: string | undefined;
+    let canonicalLoadError: string | undefined;
     if (!sessionId) {
       try {
         const cfg = loadConfig();
-        const canonical = resolveSessionStoreKey({ cfg, sessionKey });
+        canonical = resolveSessionStoreKey({ cfg, sessionKey });
         if (canonical && canonical !== sessionKey) {
-          sessionId = resolveActiveEmbeddedRunSessionId(canonical);
+          canonicalSessionId = resolveActiveEmbeddedRunSessionId(canonical);
+          sessionId = canonicalSessionId;
         }
-      } catch {
-        // loadConfig can fail in minimal/test environments — fall through to
-        // the no_active_run response below.
+      } catch (err) {
+        canonicalLoadError = err instanceof Error ? err.message : String(err);
       }
     }
     if (!sessionId) {
+      const sample = listActiveRunSessionKeys(5);
+      console.info(
+        `[agent.queueMessage] no_active_run sessionKey=${sessionKey} rawHit=${rawSessionId ? "yes" : "no"} canonical=${canonical ?? "<none>"} canonicalHit=${canonicalSessionId ? "yes" : "no"}${canonicalLoadError ? ` canonicalLoadError=${canonicalLoadError}` : ""} activeSampleKeys=${JSON.stringify(sample)}`,
+      );
       respond(true, { queued: false, reason: "no_active_run" });
       return;
     }
@@ -999,6 +1008,9 @@ export const agentHandlers: GatewayRequestHandlers = {
       respond(true, { queued: true });
       return;
     }
+    console.info(
+      `[agent.queueMessage] queued=false sessionKey=${sessionKey} sessionId=${sessionId} reason=${outcome.reason}`,
+    );
     respond(true, { queued: false, reason: outcome.reason });
   },
   "agent.wait": async ({ params, respond, context }) => {

@@ -41,6 +41,7 @@ vi.mock("../src/teams-channels.js", async () => {
   const postSystemEvent = vi.fn().mockResolvedValue({ messageId: "x" });
   const setOnPost = vi.fn();
   const setOnDeadThread = vi.fn();
+  const setOnRootFallback = vi.fn();
 
   class EcsTeamsChannels {
     registerChannel = registerChannel;
@@ -49,6 +50,7 @@ vi.mock("../src/teams-channels.js", async () => {
     postSystemEvent = postSystemEvent;
     setOnPost = setOnPost;
     setOnDeadThread = setOnDeadThread;
+    setOnRootFallback = setOnRootFallback;
   }
   return { EcsTeamsChannels, __mocks: { registerChannel } };
 });

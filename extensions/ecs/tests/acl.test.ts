@@ -22,6 +22,7 @@ vi.mock("../src/teams-channels.js", async () => {
   const isEcsChannel = vi.fn().mockReturnValue(false);
   const setOnPost = vi.fn();
   const setOnDeadThread = vi.fn();
+  const setOnRootFallback = vi.fn();
 
   class EcsTeamsChannels {
     postReplyToThread = postReplyToThread;
@@ -36,6 +37,7 @@ vi.mock("../src/teams-channels.js", async () => {
     isEcsChannel = isEcsChannel;
     setOnPost = setOnPost;
     setOnDeadThread = setOnDeadThread;
+    setOnRootFallback = setOnRootFallback;
   }
   return {
     EcsTeamsChannels,

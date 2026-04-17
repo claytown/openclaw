@@ -54,24 +54,41 @@ function narrowReason(reason: string | undefined): SubagentQueueMessageReason {
 export async function queueSubagentMessageInProcess(
   params: SubagentQueueMessageParams,
 ): Promise<SubagentQueueMessageResult> {
-  const { resolveActiveEmbeddedRunSessionId, queueEmbeddedPiMessageDetailed } =
-    await loadEmbeddedRunnerRuntime();
+  const {
+    resolveActiveEmbeddedRunSessionId,
+    queueEmbeddedPiMessageDetailed,
+    listActiveRunSessionKeys,
+  } = await loadEmbeddedRunnerRuntime();
 
-  let sessionId = resolveActiveEmbeddedRunSessionId(params.sessionKey);
+  const rawSessionId = resolveActiveEmbeddedRunSessionId(params.sessionKey);
+  let sessionId = rawSessionId;
+  let canonical: string | undefined;
+  let canonicalSessionId: string | undefined;
   if (!sessionId) {
     const canonicalize = await loadSessionKeyCanonicalizer();
-    const canonical = canonicalize(params.sessionKey);
+    canonical = canonicalize(params.sessionKey);
     if (canonical) {
-      sessionId = resolveActiveEmbeddedRunSessionId(canonical);
+      canonicalSessionId = resolveActiveEmbeddedRunSessionId(canonical);
+      sessionId = canonicalSessionId;
     }
   }
 
   if (!sessionId) {
+    const sample = listActiveRunSessionKeys(5);
+    console.info(
+      `[subagent-queue] no_active_run sessionKey=${params.sessionKey} rawHit=${rawSessionId ? "yes" : "no"} canonical=${canonical ?? "<none>"} canonicalHit=${canonicalSessionId ? "yes" : "no"} activeSampleKeys=${JSON.stringify(sample)}`,
+    );
     return { queued: false, reason: "no_active_run" };
   }
+  console.info(
+    `[subagent-queue] resolved sessionKey=${params.sessionKey} sessionId=${sessionId} via=${rawSessionId ? "raw" : canonicalSessionId ? "canonical" : "unknown"}`,
+  );
   const outcome = queueEmbeddedPiMessageDetailed(sessionId, params.message);
   if (outcome.queued) {
     return { queued: true };
   }
+  console.info(
+    `[subagent-queue] queued=false sessionKey=${params.sessionKey} sessionId=${sessionId} reason=${outcome.reason}`,
+  );
   return { queued: false, reason: narrowReason(outcome.reason) };
 }

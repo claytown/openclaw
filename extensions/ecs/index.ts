@@ -204,6 +204,25 @@ const ecsPlugin = {
         }
       });
 
+      // When the 404 fallback lands a new root message, re-index it against
+      // the same task. markDeadThread preserves the inbound byTeamsMessageId
+      // entry for the original dead id, so findByTeamsThread(replyToId) still
+      // resolves here. setTeamsMessage additionally clears teamsThreadIsDead
+      // so outbound replies to the fresh root are permitted again.
+      teams.setOnRootFallback(({ replyToId, newMessageId }) => {
+        const active = tracker.findByTeamsThread(replyToId);
+        if (active) {
+          tracker.setTeamsMessage(active.task.taskId, newMessageId);
+          log.info(
+            `[ecs] root-fallback re-indexed taskId=${active.task.taskId} replyToId=${replyToId} newMessageId=${newMessageId}`,
+          );
+        } else {
+          log.warn(
+            `[ecs] root-fallback: no tracker entry for replyToId=${replyToId}; new thread ${newMessageId} not indexed`,
+          );
+        }
+      });
+
       log.info(`[ecs] Teams configured (team: ${teamsCfg.teamId})`);
     }
 
@@ -500,18 +519,24 @@ const ecsPlugin = {
           // a fresh dispatch serializes on the session write lock.
           void (async () => {
             try {
+              const rawKey = activeTask.sessionKey;
+              // The gateway registers embedded runs under `agent:<agent>:<rest>`;
+              // ECS keeps the raw `<agent>-ecs-<taskId>` form. Log both so ops
+              // can eyeball which shape the embedded-run registry has.
+              const canonicalGuess = `agent:main:${rawKey}`;
+              log.info(
+                `[ecs] queueMessage attempt sessionKey=${rawKey} canonicalGuess=${canonicalGuess}`,
+              );
               const outcome = await api.runtime.subagent.queueMessage({
-                sessionKey: activeTask.sessionKey,
+                sessionKey: rawKey,
                 message: msg,
               });
               if (outcome.queued) {
-                log.info(
-                  `[ecs] forward succeeded via queueMessage sessionKey=${activeTask.sessionKey}`,
-                );
+                log.info(`[ecs] forward succeeded via queueMessage sessionKey=${rawKey}`);
                 return;
               }
               log.info(
-                `[ecs] subagent.queueMessage not queued (reason=${outcome.reason ?? "unknown"}); falling back to subagent.run for session ${activeTask.sessionKey}`,
+                `[ecs] subagent.queueMessage not queued (reason=${outcome.reason ?? "unknown"}) sessionKey=${rawKey} canonicalGuess=${canonicalGuess} trackerSize=${tracker.size()}; falling back to subagent.run`,
               );
               try {
                 const runResult = await api.runtime.subagent.run({

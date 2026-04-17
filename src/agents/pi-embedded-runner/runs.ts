@@ -229,6 +229,23 @@ export function resolveActiveEmbeddedRunSessionId(sessionKey: string): string | 
   );
 }
 
+/**
+ * Return up to `limit` sessionKeys currently registered in the embedded-run
+ * index. Diagnostic use only — lets a `no_active_run` log distinguish
+ * "registry empty" from "registry has a different key shape than we looked
+ * up for".
+ */
+export function listActiveRunSessionKeys(limit = 5): string[] {
+  const out: string[] = [];
+  for (const key of ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.keys()) {
+    if (out.length >= limit) {
+      break;
+    }
+    out.push(key);
+  }
+  return out;
+}
+
 export function getActiveEmbeddedRunCount(): number {
   let activeCount = ACTIVE_EMBEDDED_RUNS.size;
   for (const sessionId of listActiveReplyRunSessionIds()) {
