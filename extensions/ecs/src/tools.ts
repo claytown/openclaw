@@ -347,7 +347,11 @@ export function createEcsThreadReplyTool(deps: EcsToolDeps, ctx: EcsToolContext)
     label: "ECS",
     name: "ecs_thread_reply",
     description:
-      "Reply to a human's message in the task's Teams/Discord thread. Use this when you receive a [Teams thread reply from ...] message and want to respond.",
+      "Post a reply in the task's Teams/Discord thread to respond to a human. " +
+      "You MUST call this for every message returned by ecs_check_inbox — once per message, " +
+      "with a brief contextual reply that references your actual current state (current file, " +
+      "last command output, progress %). Also call this if you see a [Teams thread reply from ...] " +
+      "preamble in your conversation history. Do not skip this step, even mid-task.",
     parameters: EcsThreadReplySchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -400,14 +404,14 @@ export function createEcsCheckInboxTool(deps: EcsToolDeps, ctx: EcsToolContext):
     label: "ECS",
     name: "ecs_check_inbox",
     description:
-      "Check the inbox for any human messages sent to this task's Teams thread. " +
-      "Returns an array of pending messages [{id, sender, content, ts}] or [] if empty. " +
-      "Atomically clears the inbox on read, so each message is delivered exactly once. " +
-      "Call this at natural milestone boundaries (after verifying a build, between " +
-      "acceptance-criteria items, before starting a new file, before declaring task " +
-      "completion). If messages are returned, acknowledge each using ecs_thread_reply " +
-      "before continuing work. Don't abandon the current task unless the user explicitly " +
-      "requests it.",
+      "Check the inbox for human messages sent to this task's Teams thread. " +
+      "Returns {messages: [{id, sender, content, ts}]} or {messages: []} if empty. " +
+      "Atomically clears the inbox on read — each message is delivered exactly once. " +
+      "Call at natural milestone boundaries (after verifying a build, between acceptance-criteria " +
+      "items, before starting a new file, before declaring task completion). " +
+      "IF the result contains any messages, you MUST immediately call ecs_thread_reply ONCE PER " +
+      "MESSAGE before invoking any other tool. Do not batch replies, do not skip, do not continue " +
+      "task work until every message has been replied to. The human is waiting for a response.",
     parameters: EcsCheckInboxSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -418,6 +422,12 @@ export function createEcsCheckInboxTool(deps: EcsToolDeps, ctx: EcsToolContext):
         return jsonResult({ messages: [] });
       }
       const { messages } = await deps.callback.checkInbox(taskId);
+      if (messages.length > 0) {
+        return jsonResult({
+          messages,
+          required_next_action: `Call ecs_thread_reply once for each of the ${messages.length} message(s) above before any other tool`,
+        });
+      }
       return jsonResult({ messages });
     },
   };
