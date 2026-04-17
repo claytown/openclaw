@@ -38,30 +38,37 @@ function extractRawId(conversationId: string | undefined): string | undefined {
   return colonIdx >= 0 ? conversationId.slice(colonIdx + 1) : conversationId;
 }
 
-/** Loopback-only request check: reject if there are any forwarded-for headers
- * or if the socket is not bound to a loopback address. We deliberately do not
- * rely on a trusted-proxy allowlist here because this endpoint is meant for
- * in-process gateway calls only. */
-function isLoopbackRequest(req: {
+/** Classify a remote address as loopback. Accepts IPv4 loopback (127/8),
+ * IPv6 loopback (::1 in all its shapes), and IPv4-mapped IPv6
+ * (::ffff:127.x.y.z) in the variants Node's `socket.remoteAddress` can
+ * produce in containerized environments. The auth-token check is the
+ * primary gate for these endpoints; this helper is defense-in-depth and
+ * the returned reason feeds the rejection log so prod misconfig is easy
+ * to diagnose. */
+function classifyLoopbackReject(req: {
   socket?: { remoteAddress?: string | undefined };
   headers: Record<string, string | string[] | undefined>;
-}): boolean {
-  const addr = req.socket?.remoteAddress ?? "";
+}): { ok: true } | { ok: false; reason: string } {
+  const addr = (req.socket?.remoteAddress ?? "").toLowerCase();
+  if (!addr) {
+    return { ok: false, reason: "missing remoteAddress" };
+  }
+  const stripped = addr.startsWith("::ffff:") ? addr.slice("::ffff:".length) : addr;
   const isLoopbackAddr =
-    addr === "127.0.0.1" ||
-    addr === "::1" ||
-    addr === "::ffff:127.0.0.1" ||
-    addr.startsWith("127.");
+    stripped === "::1" ||
+    stripped === "0:0:0:0:0:0:0:1" ||
+    stripped.startsWith("127.") ||
+    stripped === "localhost";
   if (!isLoopbackAddr) {
-    return false;
+    return { ok: false, reason: `non-loopback remoteAddress=${addr}` };
   }
   const forwardedHeaders = ["x-forwarded-for", "forwarded", "x-real-ip"] as const;
   for (const h of forwardedHeaders) {
     if (req.headers[h]) {
-      return false;
+      return { ok: false, reason: `forwarded header present: ${h}` };
     }
   }
-  return true;
+  return { ok: true };
 }
 
 /** Read a JSON request body with a small hard size cap. */
@@ -403,12 +410,13 @@ const ecsPlugin = {
           res.end();
           return true;
         }
-        if (!isLoopbackRequest(req)) {
+        const loopback = classifyLoopbackReject(req);
+        if (!loopback.ok) {
           log.warn(
-            `[ecs] /__internal/ecs/inject rejected non-loopback request remoteAddress=${req.socket?.remoteAddress ?? "<none>"}`,
+            `[gateway] __internal/ecs/inject rejected reason=${loopback.reason} remoteAddress=${req.socket?.remoteAddress ?? "<none>"}`,
           );
           res.statusCode = 403;
-          res.end();
+          res.end(JSON.stringify({ error: loopback.reason }));
           return true;
         }
         let body: unknown;
@@ -437,6 +445,9 @@ const ecsPlugin = {
           authToken: string;
         };
         if (authToken !== injectAuthToken) {
+          log.warn(
+            `[gateway] __internal/ecs/inject rejected reason=bad-authToken sessionKey=${sessionKey} tokenLen=${authToken.length}`,
+          );
           res.statusCode = 403;
           res.end(JSON.stringify({ error: "bad authToken" }));
           return true;
@@ -486,12 +497,13 @@ const ecsPlugin = {
           res.end();
           return true;
         }
-        if (!isLoopbackRequest(req)) {
+        const loopback = classifyLoopbackReject(req);
+        if (!loopback.ok) {
           log.warn(
-            `[ecs] /__internal/ecs/session/interrupt rejected non-loopback request remoteAddress=${req.socket?.remoteAddress ?? "<none>"}`,
+            `[gateway] __internal/ecs/session/interrupt rejected reason=${loopback.reason} remoteAddress=${req.socket?.remoteAddress ?? "<none>"}`,
           );
           res.statusCode = 403;
-          res.end();
+          res.end(JSON.stringify({ error: loopback.reason }));
           return true;
         }
         let body: unknown;
@@ -517,6 +529,9 @@ const ecsPlugin = {
           authToken: string;
         };
         if (authToken !== injectAuthToken) {
+          log.warn(
+            `[gateway] __internal/ecs/session/interrupt rejected reason=bad-authToken sessionKey=${sessionKey} tokenLen=${authToken.length}`,
+          );
           res.statusCode = 403;
           res.end(JSON.stringify({ error: "bad authToken" }));
           return true;
@@ -764,20 +779,27 @@ const ecsPlugin = {
                 // queue messages surface on the next run.
                 if (injectPort > 0) {
                   try {
-                    const resp = await fetch(
-                      `http://127.0.0.1:${injectPort}/__internal/ecs/session/interrupt`,
-                      {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                          sessionKey: rawKey,
-                          authToken: injectAuthToken,
-                        }),
-                        signal: AbortSignal.timeout(5_000),
-                      },
-                    );
+                    const url = `http://127.0.0.1:${injectPort}/__internal/ecs/session/interrupt`;
                     log.info(
-                      `[ecs] interrupt after bus: sessionKey=${rawKey} status=${resp.status}`,
+                      `[ecs] loopback interrupt to=${url} auth=authToken(len=${injectAuthToken.length}) sessionKey=${rawKey}`,
+                    );
+                    const resp = await fetch(url, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        sessionKey: rawKey,
+                        authToken: injectAuthToken,
+                      }),
+                      signal: AbortSignal.timeout(5_000),
+                    });
+                    let respBody = "";
+                    try {
+                      respBody = (await resp.text()).slice(0, 200);
+                    } catch {
+                      // Ignore body-read errors — status code is enough.
+                    }
+                    log.info(
+                      `[ecs] interrupt after bus: sessionKey=${rawKey} status=${resp.status} body=${respBody}`,
                     );
                   } catch (intErr) {
                     const intMsg = intErr instanceof Error ? intErr.message : String(intErr);
@@ -798,7 +820,11 @@ const ecsPlugin = {
                 return;
               }
               try {
-                const resp = await fetch(`http://127.0.0.1:${injectPort}/__internal/ecs/inject`, {
+                const url = `http://127.0.0.1:${injectPort}/__internal/ecs/inject`;
+                log.info(
+                  `[ecs] loopback inject to=${url} auth=authToken(len=${injectAuthToken.length}) sessionKey=${rawKey}`,
+                );
+                const resp = await fetch(url, {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({
@@ -809,7 +835,15 @@ const ecsPlugin = {
                   }),
                   signal: AbortSignal.timeout(5_000),
                 });
-                log.info(`[ecs] forward: method=http sessionKey=${rawKey} status=${resp.status}`);
+                let respBody = "";
+                try {
+                  respBody = (await resp.text()).slice(0, 200);
+                } catch {
+                  // Ignore body-read errors — status code is enough.
+                }
+                log.info(
+                  `[ecs] forward: method=http sessionKey=${rawKey} status=${resp.status} body=${respBody}`,
+                );
               } catch (httpErr) {
                 const httpMsg = httpErr instanceof Error ? httpErr.message : String(httpErr);
                 log.warn(

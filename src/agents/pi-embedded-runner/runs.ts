@@ -396,6 +396,14 @@ export function setActiveEmbeddedRun(
   });
   if (!sessionId.startsWith("probe-")) {
     diag.debug(`run registered: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
+    // Unconditional (info-level) companion log so operators can eyeball the
+    // live embedded-run map from deployed logs without enabling debug. This
+    // is the ground truth for "does queueMessage/interrupt have anything to
+    // target" — if a session key you expect to be here is missing, the
+    // forwarder and inject/interrupt helpers cannot reach it.
+    console.info(
+      `[subagent] session registered key=${sessionKey ?? "<none>"} id=${sessionId} reason=${wasActive ? "run_replaced" : "run_started"} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`,
+    );
   }
 }
 
@@ -422,6 +430,13 @@ export function clearActiveEmbeddedRun(
     logSessionStateChange({ sessionId, sessionKey, state: "idle", reason: "run_completed" });
     if (!sessionId.startsWith("probe-")) {
       diag.debug(`run cleared: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
+      // Symmetric info-level companion to the "session registered" log in
+      // setActiveEmbeddedRun. An idle window between tool calls and the next
+      // LLM turn is when queueMessage/interrupt will see no_active_run, so
+      // this log pins down exactly when the session left the map.
+      console.info(
+        `[subagent] session cleared key=${sessionKey ?? "<none>"} id=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`,
+      );
     }
     notifyEmbeddedRunEnded(sessionId);
   } else {
