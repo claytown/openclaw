@@ -108,6 +108,7 @@ function createApi(pluginConfig: Record<string, unknown>) {
         run,
         waitForRun: vi.fn(),
         queueMessage,
+        interrupt: vi.fn().mockResolvedValue({ interrupted: true }),
         getSessionMessages: vi.fn().mockResolvedValue({ messages: [] }),
         deleteSession: vi.fn(),
       },

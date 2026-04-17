@@ -469,6 +469,76 @@ const ecsPlugin = {
       },
     });
 
+    // Sibling loopback endpoint that cancels the active run for a session.
+    // The before_dispatch forwarder uses this as a second step after a
+    // successful queueMessage: for coding-ecs-* sessions whose tool loop
+    // doesn't poll the pending-message queue between tool calls, the queued
+    // message alone never reaches the LLM. Aborting the current run lands
+    // at the next safe boundary (after the current tool call completes) so
+    // the session yields and the next run sees the queued message.
+    api.registerHttpRoute({
+      path: "/__internal/ecs/session/interrupt",
+      match: "exact",
+      auth: "plugin",
+      handler: async (req, res) => {
+        if (req.method !== "POST") {
+          res.statusCode = 405;
+          res.end();
+          return true;
+        }
+        if (!isLoopbackRequest(req)) {
+          log.warn(
+            `[ecs] /__internal/ecs/session/interrupt rejected non-loopback request remoteAddress=${req.socket?.remoteAddress ?? "<none>"}`,
+          );
+          res.statusCode = 403;
+          res.end();
+          return true;
+        }
+        let body: unknown;
+        try {
+          body = await readJsonBody(req);
+        } catch (err) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+          return true;
+        }
+        if (
+          typeof body !== "object" ||
+          body === null ||
+          typeof (body as Record<string, unknown>).sessionKey !== "string" ||
+          typeof (body as Record<string, unknown>).authToken !== "string"
+        ) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ error: "invalid body shape" }));
+          return true;
+        }
+        const { sessionKey, authToken } = body as {
+          sessionKey: string;
+          authToken: string;
+        };
+        if (authToken !== injectAuthToken) {
+          res.statusCode = 403;
+          res.end(JSON.stringify({ error: "bad authToken" }));
+          return true;
+        }
+
+        try {
+          const result = await api.runtime.subagent.interrupt({ sessionKey });
+          const status = result.interrupted ? "ok" : "noop";
+          log.info(`[ecs] interrupt: sessionKey=${sessionKey} status=${status}`);
+          res.statusCode = 200;
+          res.end(JSON.stringify({ status, interrupted: result.interrupted }));
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.warn(`[ecs] interrupt: sessionKey=${sessionKey} status=err err=${msg}`);
+          res.statusCode = 500;
+          res.end(JSON.stringify({ status: "err", error: msg }));
+        }
+
+        return true;
+      },
+    });
+
     // --- Tools ---
     const toolDeps: EcsToolDeps = { tracker, discord, teams, callback, questionRelay };
 
@@ -686,6 +756,36 @@ const ecsPlugin = {
               });
               if (outcome.queued) {
                 log.info(`[ecs] forward: method=bus sessionKey=${rawKey} status=ok`);
+                // The pending-message queue is only consumed at LLM turn
+                // boundaries. Coding agents in a long tool loop (tests,
+                // builds, commits) never reach that boundary on their own,
+                // so the queued message rots. Interrupt the current run so
+                // it yields at the next safe tool boundary; accumulated
+                // queue messages surface on the next run.
+                if (injectPort > 0) {
+                  try {
+                    const resp = await fetch(
+                      `http://127.0.0.1:${injectPort}/__internal/ecs/session/interrupt`,
+                      {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                          sessionKey: rawKey,
+                          authToken: injectAuthToken,
+                        }),
+                        signal: AbortSignal.timeout(5_000),
+                      },
+                    );
+                    log.info(
+                      `[ecs] interrupt after bus: sessionKey=${rawKey} status=${resp.status}`,
+                    );
+                  } catch (intErr) {
+                    const intMsg = intErr instanceof Error ? intErr.message : String(intErr);
+                    log.warn(
+                      `[ecs] interrupt after bus: sessionKey=${rawKey} status=err err=${intMsg}`,
+                    );
+                  }
+                }
                 return;
               }
               log.info(

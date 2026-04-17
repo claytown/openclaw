@@ -9,7 +9,10 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntimeLoaderLogger } from "../plugins/runtime/load-context.js";
-import { queueSubagentMessageInProcess } from "../plugins/runtime/runtime-subagent-queue.js";
+import {
+  interruptSubagentInProcess,
+  queueSubagentMessageInProcess,
+} from "../plugins/runtime/runtime-subagent-queue.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { PluginLogger } from "../plugins/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -355,10 +358,12 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       }
       return { runId };
     },
-    // queueMessage is a pure in-process op — skip the gateway request plumbing
-    // so it works from any async context (including channel webhook handlers
-    // that run outside a gateway request scope).
+    // queueMessage and interrupt are pure in-process ops — skip the gateway
+    // request plumbing so they work from any async context (including
+    // channel webhook handlers and loopback endpoints that run outside a
+    // gateway request scope).
     queueMessage: queueSubagentMessageInProcess,
+    interrupt: interruptSubagentInProcess,
     async waitForRun(params) {
       const payload = await dispatchGatewayMethod<{ status?: string; error?: string }>(
         "agent.wait",

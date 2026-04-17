@@ -35,7 +35,9 @@ export class EcsApiCallback {
     path: string,
     body: Record<string, unknown>,
   ): Promise<{ ok: boolean; status?: number }> {
+    const event = typeof body.event === "string" ? body.event : "<none>";
     if (!this.baseUrl) {
+      console.info(`[ecs-callback] path=${path} event=${event} status=skip (no baseUrl)`);
       return { ok: false };
     }
 
@@ -55,9 +57,27 @@ export class EcsApiCallback {
         }),
         signal: AbortSignal.timeout(10_000),
       });
+      // Always log the callback outcome so prod logs can distinguish
+      // "OpenClaw never posted" from "control plane rejected" without
+      // reading the control-plane side. Include the event name because
+      // a single path handles many event types.
+      if (resp.ok) {
+        console.info(`[ecs-callback] path=${path} event=${event} status=${resp.status}`);
+      } else {
+        let respBody = "";
+        try {
+          respBody = (await resp.text()).slice(0, 500);
+        } catch {
+          // Ignore body-read errors — the status code is still useful.
+        }
+        console.warn(
+          `[ecs-callback] path=${path} event=${event} status=${resp.status} body=${respBody}`,
+        );
+      }
       return { ok: resp.ok, status: resp.status };
     } catch (err) {
-      console.warn(`[ecs] callback to ${url} failed:`, err instanceof Error ? err.message : err);
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[ecs-callback] path=${path} event=${event} status=err err=${msg}`);
       return { ok: false };
     }
   }

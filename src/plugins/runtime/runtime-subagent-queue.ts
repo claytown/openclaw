@@ -1,4 +1,6 @@
 import type {
+  SubagentInterruptParams,
+  SubagentInterruptResult,
   SubagentQueueMessageParams,
   SubagentQueueMessageReason,
   SubagentQueueMessageResult,
@@ -91,4 +93,54 @@ export async function queueSubagentMessageInProcess(
     `[subagent-queue] queued=false sessionKey=${params.sessionKey} sessionId=${sessionId} reason=${outcome.reason}`,
   );
   return { queued: false, reason: narrowReason(outcome.reason) };
+}
+
+/**
+ * Interrupt the active embedded run for `sessionKey`, if any.
+ *
+ * Wraps `abortEmbeddedPiRun(sessionId)` from the pi-embedded-runner. The
+ * runner's abort lands at the next safe boundary (after the current tool
+ * call completes), so the current turn is not torn apart mid-flight.
+ *
+ * Resolution follows the same pattern as `queueSubagentMessageInProcess`:
+ * try the raw sessionKey first, then the canonical `agent:<agentId>:<rest>`
+ * form, so callers that track their own raw keys and callers that track the
+ * gateway-canonicalized key both work.
+ *
+ * Safe to call when no run is active — returns `{ interrupted: false }`.
+ */
+export async function interruptSubagentInProcess(
+  params: SubagentInterruptParams,
+): Promise<SubagentInterruptResult> {
+  const { resolveActiveEmbeddedRunSessionId, abortEmbeddedPiRun, listActiveRunSessionKeys } =
+    await loadEmbeddedRunnerRuntime();
+
+  console.info(`[subagent] interrupt requested sessionKey=${params.sessionKey}`);
+
+  const rawSessionId = resolveActiveEmbeddedRunSessionId(params.sessionKey);
+  let sessionId = rawSessionId;
+  let canonical: string | undefined;
+  let canonicalSessionId: string | undefined;
+  if (!sessionId) {
+    const canonicalize = await loadSessionKeyCanonicalizer();
+    canonical = canonicalize(params.sessionKey);
+    if (canonical) {
+      canonicalSessionId = resolveActiveEmbeddedRunSessionId(canonical);
+      sessionId = canonicalSessionId;
+    }
+  }
+
+  if (!sessionId) {
+    const sample = listActiveRunSessionKeys(5);
+    console.info(
+      `[subagent] interrupt no_active_run sessionKey=${params.sessionKey} rawHit=${rawSessionId ? "yes" : "no"} canonical=${canonical ?? "<none>"} canonicalHit=${canonicalSessionId ? "yes" : "no"} activeSampleKeys=${JSON.stringify(sample)}`,
+    );
+    return { interrupted: false };
+  }
+
+  const interrupted = abortEmbeddedPiRun(sessionId);
+  console.info(
+    `[subagent] interrupt result sessionKey=${params.sessionKey} sessionId=${sessionId} interrupted=${interrupted}`,
+  );
+  return { interrupted };
 }

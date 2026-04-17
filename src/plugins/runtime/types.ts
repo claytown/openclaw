@@ -66,6 +66,16 @@ export type SubagentQueueMessageResult = {
   reason?: SubagentQueueMessageReason;
 };
 
+export type SubagentInterruptParams = {
+  sessionKey: string;
+};
+
+export type SubagentInterruptResult = {
+  /** `true` when an active run was aborted; `false` when there was nothing to
+   * interrupt (no active run, or the session key does not resolve). */
+  interrupted: boolean;
+};
+
 /** Trusted in-process runtime surface injected into native plugins. */
 export type PluginRuntime = PluginRuntimeCore & {
   subagent: {
@@ -79,6 +89,21 @@ export type PluginRuntime = PluginRuntimeCore & {
      * Returns `{ queued: false, reason }` when no streaming run is available.
      */
     queueMessage: (params: SubagentQueueMessageParams) => Promise<SubagentQueueMessageResult>;
+    /**
+     * Cancel the session's current embedded run.
+     *
+     * Intended for waking sessions that have accumulated queued messages but
+     * are stuck in a long tool loop that never returns to the LLM (for
+     * example, a coding agent running tests). The abort lands at the next
+     * safe boundary — after the currently-executing tool call completes, not
+     * mid-call — so tool state is not left dangling. Messages that arrived
+     * via `queueMessage` surface on the next run that the session starts.
+     *
+     * No-op safe: calling this on a session with no active run returns
+     * `{ interrupted: false }` rather than throwing. Purely in-process — it
+     * operates on the embedded-run map without a gateway round-trip.
+     */
+    interrupt: (params: SubagentInterruptParams) => Promise<SubagentInterruptResult>;
     getSessionMessages: (
       params: SubagentGetSessionMessagesParams,
     ) => Promise<SubagentGetSessionMessagesResult>;
