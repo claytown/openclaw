@@ -209,6 +209,23 @@ export class EcsApiCallback {
     });
   }
 
+  /**
+   * Notify the control plane that OpenClaw just created the Teams thread
+   * root for a task. Lets the dashboard deep-link to the thread. Fire-and-
+   * forget — dispatch still succeeds if the control plane has not yet
+   * implemented the handler for this event.
+   */
+  async reportTeamsThreadCreated(payload: {
+    agent_task_id: string;
+    teams_thread_id: string;
+    teams_channel_id: string;
+  }): Promise<{ ok: boolean; status?: number }> {
+    return this.post("/agent_task_callback", {
+      ...payload,
+      event: "teams_thread_created",
+    });
+  }
+
   async reportQuestion(payload: {
     question_id: string;
     agent_task_id: string | null;

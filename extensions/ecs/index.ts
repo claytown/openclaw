@@ -6,6 +6,7 @@
  * back to an ECS control plane.
  */
 
+import { randomBytes } from "node:crypto";
 import { RequestClient } from "@buape/carbon";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/ecs";
 import { EcsApiCallback } from "./src/api-callback.js";
@@ -35,6 +36,54 @@ function extractRawId(conversationId: string | undefined): string | undefined {
   }
   const colonIdx = conversationId.indexOf(":");
   return colonIdx >= 0 ? conversationId.slice(colonIdx + 1) : conversationId;
+}
+
+/** Loopback-only request check: reject if there are any forwarded-for headers
+ * or if the socket is not bound to a loopback address. We deliberately do not
+ * rely on a trusted-proxy allowlist here because this endpoint is meant for
+ * in-process gateway calls only. */
+function isLoopbackRequest(req: {
+  socket?: { remoteAddress?: string | undefined };
+  headers: Record<string, string | string[] | undefined>;
+}): boolean {
+  const addr = req.socket?.remoteAddress ?? "";
+  const isLoopbackAddr =
+    addr === "127.0.0.1" ||
+    addr === "::1" ||
+    addr === "::ffff:127.0.0.1" ||
+    addr.startsWith("127.");
+  if (!isLoopbackAddr) {
+    return false;
+  }
+  const forwardedHeaders = ["x-forwarded-for", "forwarded", "x-real-ip"] as const;
+  for (const h of forwardedHeaders) {
+    if (req.headers[h]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Read a JSON request body with a small hard size cap. */
+async function readJsonBody(
+  req: import("node:http").IncomingMessage,
+  maxBytes = 64 * 1024,
+): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of req) {
+    const buf = typeof chunk === "string" ? Buffer.from(chunk) : (chunk as Buffer);
+    total += buf.length;
+    if (total > maxBytes) {
+      throw new Error(`body exceeds ${maxBytes} bytes`);
+    }
+    chunks.push(buf);
+  }
+  const text = Buffer.concat(chunks).toString("utf8");
+  if (!text) {
+    return {};
+  }
+  return JSON.parse(text);
 }
 
 /** Normalize a Discord bot token (strip env-var prefix, trim whitespace). */
@@ -332,6 +381,94 @@ const ecsPlugin = {
       },
     });
 
+    // --- Loopback-only inject endpoint ---
+    //
+    // Used by the before_dispatch forwarder when a human reply lands but the
+    // target agent session is not currently streaming. The forwarder POSTs
+    // through the loopback gateway so this handler runs with a legitimate
+    // gateway request context and subagent.run() can attach a fresh run.
+    // Calling subagent.run() directly from inside a hook on the same stack
+    // that received the inbound message deadlocks on the session write lock
+    // for coding sessions that were previously woken up this way.
+    let injectPort = 0;
+    const injectAuthToken = randomBytes(32).toString("hex");
+
+    api.registerHttpRoute({
+      path: "/__internal/ecs/inject",
+      match: "exact",
+      auth: "plugin",
+      handler: async (req, res) => {
+        if (req.method !== "POST") {
+          res.statusCode = 405;
+          res.end();
+          return true;
+        }
+        if (!isLoopbackRequest(req)) {
+          log.warn(
+            `[ecs] /__internal/ecs/inject rejected non-loopback request remoteAddress=${req.socket?.remoteAddress ?? "<none>"}`,
+          );
+          res.statusCode = 403;
+          res.end();
+          return true;
+        }
+        let body: unknown;
+        try {
+          body = await readJsonBody(req);
+        } catch (err) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+          return true;
+        }
+        if (
+          typeof body !== "object" ||
+          body === null ||
+          typeof (body as Record<string, unknown>).sessionKey !== "string" ||
+          typeof (body as Record<string, unknown>).content !== "string" ||
+          typeof (body as Record<string, unknown>).authToken !== "string" ||
+          (body as Record<string, unknown>).role !== "user"
+        ) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ error: "invalid body shape" }));
+          return true;
+        }
+        const { sessionKey, content, authToken } = body as {
+          sessionKey: string;
+          content: string;
+          authToken: string;
+        };
+        if (authToken !== injectAuthToken) {
+          res.statusCode = 403;
+          res.end(JSON.stringify({ error: "bad authToken" }));
+          return true;
+        }
+
+        // Fire-and-forget: subagent.run acquires the session write lock and
+        // can block for the duration of a turn. Resolving the HTTP response
+        // first prevents the caller (the before_dispatch hook) from tying up
+        // its own stack on this round-trip.
+        res.statusCode = 202;
+        res.end(JSON.stringify({ accepted: true }));
+
+        void (async () => {
+          try {
+            const runResult = await api.runtime.subagent.run({
+              sessionKey,
+              message: content,
+              deliver: false,
+            });
+            log.info(
+              `[ecs] inject: run attached sessionKey=${sessionKey} runId=${runResult.runId}`,
+            );
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.warn(`[ecs] inject: run failed sessionKey=${sessionKey}: ${msg}`);
+          }
+        })();
+
+        return true;
+      },
+    });
+
     // --- Tools ---
     const toolDeps: EcsToolDeps = { tracker, discord, teams, callback, questionRelay };
 
@@ -417,6 +554,20 @@ const ecsPlugin = {
         const isEcsDiscord = discord.isEcsChannel(rawId);
         const aclPath = teamsAclPath(rawId);
         const isEcsTeams = aclPath != null;
+
+        // If the MSTeams channel plugin surfaces activity.serviceUrl on the
+        // inbound event metadata, cache it per-channel so outbound replies
+        // target the same regional Bot Framework endpoint that minted the
+        // conversation. `event.metadata.serviceUrl` is not populated by core
+        // today (only threadId is); this is a defensive read so we can land
+        // the cache infrastructure first and plumb the metadata through in a
+        // follow-up change to the MSTeams handler.
+        if (isEcsTeams && teams) {
+          const metaServiceUrl = event.metadata?.serviceUrl;
+          if (typeof metaServiceUrl === "string" && metaServiceUrl.length > 0) {
+            teams.recordInboundServiceUrl(rawId, metaServiceUrl);
+          }
+        }
 
         log.info(
           `[ecs] message_received: conversationId=${ctx.conversationId} rawId=${rawId} from=${event.from} isEcsDiscord=${isEcsDiscord} isEcsTeams=${isEcsTeams}${aclPath ? ` via=${aclPath}` : ""} hasPending=${questionRelay.hasPending(rawId)}`,
@@ -515,14 +666,16 @@ const ecsPlugin = {
           const msg = `[Teams thread reply from ${sender}]\n${event.content}\n\nIMPORTANT: Use the ecs_thread_reply tool to respond to this message. The human is waiting for a reply in the task thread.`;
 
           // Prefer queueing into the active run so the next LLM turn picks up
-          // the reply. Fall back to `run` only when no streaming run is active;
-          // a fresh dispatch serializes on the session write lock.
+          // the reply. When there is no active streaming run, POST to the
+          // loopback /__internal/ecs/inject endpoint instead of calling
+          // subagent.run() on this same stack: the hook is inside the gateway
+          // dispatch path and subagent.run() contends on the session write
+          // lock for coding-ecs-* sessions we previously woke up the same
+          // way. The loopback handler is the boundary that detaches this
+          // stack from the fresh run.
           void (async () => {
+            const rawKey = activeTask.sessionKey;
             try {
-              const rawKey = activeTask.sessionKey;
-              // The gateway registers embedded runs under `agent:<agent>:<rest>`;
-              // ECS keeps the raw `<agent>-ecs-<taskId>` form. Log both so ops
-              // can eyeball which shape the embedded-run registry has.
               const canonicalGuess = `agent:main:${rawKey}`;
               log.info(
                 `[ecs] queueMessage attempt sessionKey=${rawKey} canonicalGuess=${canonicalGuess}`,
@@ -532,32 +685,40 @@ const ecsPlugin = {
                 message: msg,
               });
               if (outcome.queued) {
-                log.info(`[ecs] forward succeeded via queueMessage sessionKey=${rawKey}`);
+                log.info(`[ecs] forward: method=bus sessionKey=${rawKey} status=ok`);
                 return;
               }
               log.info(
-                `[ecs] subagent.queueMessage not queued (reason=${outcome.reason ?? "unknown"}) sessionKey=${rawKey} canonicalGuess=${canonicalGuess} trackerSize=${tracker.size()}; falling back to subagent.run`,
+                `[ecs] subagent.queueMessage not queued (reason=${outcome.reason ?? "unknown"}) sessionKey=${rawKey} canonicalGuess=${canonicalGuess} trackerSize=${tracker.size()}; falling back to loopback inject`,
               );
-              try {
-                const runResult = await api.runtime.subagent.run({
-                  sessionKey: activeTask.sessionKey,
-                  message: msg,
-                  deliver: false,
-                });
-                log.info(
-                  `[ecs] forward succeeded via run sessionKey=${activeTask.sessionKey} runId=${runResult.runId}`,
-                );
-              } catch (runErr) {
-                const runMsg = runErr instanceof Error ? runErr.message : String(runErr);
+              if (injectPort <= 0) {
                 log.warn(
-                  `[ecs] forward failed via run sessionKey=${activeTask.sessionKey}: ${runMsg}`,
+                  `[ecs] forward: method=http sessionKey=${rawKey} status=err (gateway port not yet captured)`,
+                );
+                return;
+              }
+              try {
+                const resp = await fetch(`http://127.0.0.1:${injectPort}/__internal/ecs/inject`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    sessionKey: rawKey,
+                    role: "user",
+                    content: msg,
+                    authToken: injectAuthToken,
+                  }),
+                  signal: AbortSignal.timeout(5_000),
+                });
+                log.info(`[ecs] forward: method=http sessionKey=${rawKey} status=${resp.status}`);
+              } catch (httpErr) {
+                const httpMsg = httpErr instanceof Error ? httpErr.message : String(httpErr);
+                log.warn(
+                  `[ecs] forward: method=http sessionKey=${rawKey} status=err err=${httpMsg}`,
                 );
               }
             } catch (err) {
               const errMsg = err instanceof Error ? err.message : String(err);
-              log.warn(
-                `[ecs] forward failed via queueMessage sessionKey=${activeTask.sessionKey}: ${errMsg}`,
-              );
+              log.warn(`[ecs] forward failed via queueMessage sessionKey=${rawKey}: ${errMsg}`);
             }
           })();
 
@@ -616,10 +777,15 @@ const ecsPlugin = {
         .catch((err) => log.warn(`[ecs] ecs-post callback failed: ${err}`));
     });
 
-    // Hook: gateway started — post a heartbeat.
+    // Hook: gateway started — post a heartbeat. Also captures the gateway
+    // HTTP port so the forwarder can POST to /__internal/ecs/inject over
+    // loopback when an active session is not streaming.
     api.on(
       "gateway_start",
       async (event) => {
+        if (typeof event.port === "number" && event.port > 0) {
+          injectPort = event.port;
+        }
         const sysEvent = {
           title: "Gateway Online",
           description: `Gateway started on port ${event.port}.`,

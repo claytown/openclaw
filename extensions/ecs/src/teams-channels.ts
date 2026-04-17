@@ -17,6 +17,20 @@ import type {
 
 const LOGIN_BASE = "https://login.microsoftonline.com";
 
+/**
+ * When a reply 404s with ActivityNotFoundInConversation AND the alternate-id
+ * retry ladder has exhausted, the legacy behavior was to post the status
+ * update as a fresh root message and re-index the tracker against it. Once
+ * OpenClaw owns root-message creation for every task, all replies target a
+ * messageId we ourselves just minted, so a 404 here is a real symptom rather
+ * than an expected control-plane/opensource-fork mismatch. Keep the legacy
+ * path available via env flag so we can flip it back on during rollout if
+ * unknown Teams thread lifecycle edges show up.
+ */
+function fallbackRootOn404Enabled(): boolean {
+  return process.env.ECS_TEAMS_FALLBACK_ROOT_ON_404 === "true";
+}
+
 // --- Token cache ---
 
 let botToken: string | null = null;
@@ -75,14 +89,34 @@ export type BotFrameworkActivityResponse = {
   [k: string]: unknown;
 };
 
+function normalizeServiceUrl(raw: string | undefined): string | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.replace(/\/$/, "");
+}
+
 async function botSend(
   creds: TeamsCreds,
   conversationId: string,
   text: string,
-  replyToId?: string,
+  replyToId: string | undefined,
+  overrideServiceUrl: string | undefined,
 ): Promise<BotFrameworkActivityResponse> {
   const token = await getBotToken(creds);
-  const base = creds.serviceUrl.replace(/\/$/, "");
+  // The Bot Framework's regional Traffic Manager endpoints
+  // (`smba.trafficmanager.net/{emea,amer,...}`) are NOT interchangeable for
+  // reply lookups: a replyToId minted behind one regional endpoint 404s when
+  // posted to another. When we have a cached inbound serviceUrl for the
+  // conversation (learned from activity.serviceUrl on an earlier inbound
+  // activity), prefer it; otherwise fall back to the configured default.
+  const base = overrideServiceUrl ?? normalizeServiceUrl(creds.serviceUrl) ?? "";
+  const source = overrideServiceUrl ? "cache" : "env";
+  console.info(`[ecs-teams] outbound using serviceUrl=${base} source=${source}`);
 
   // Teams channel thread replies work reliably only when posted to the
   // SAME conversation URL as the root activity, with replyToId in the body
@@ -115,7 +149,7 @@ async function botSend(
   if (res.status === 429) {
     const retryAfter = parseInt(res.headers.get("Retry-After") || "5", 10);
     await new Promise((r) => setTimeout(r, retryAfter * 1000));
-    return botSend(creds, conversationId, text, replyToId);
+    return botSend(creds, conversationId, text, replyToId, overrideServiceUrl);
   }
 
   const respText = await res.text();
@@ -227,6 +261,12 @@ export class EcsTeamsChannels {
   // thread dead. Bounded to the N most recent roots so memory stays flat.
   private replyCandidatesByPrimary = new Map<string, string[]>();
   private static REPLY_CANDIDATES_MAX_ENTRIES = 256;
+  // Per-channel inbound serviceUrl cache. Populated from activity.serviceUrl
+  // observed on inbound activities; consulted on outbound posts so replies
+  // go to the same regional Bot Framework endpoint that minted the
+  // conversation. Falls back to creds.serviceUrl when a channel is unknown.
+  private channelServiceUrls = new Map<string, string>();
+  private static CHANNEL_SERVICE_URL_MAX_ENTRIES = 512;
 
   constructor(
     creds: TeamsCreds,
@@ -266,6 +306,36 @@ export class EcsTeamsChannels {
   /** Eagerly register a channel ID so isEcsChannel() recognizes it. */
   registerChannel(channelId: string): void {
     getKnownTeamsChannelIds().add(channelId);
+  }
+
+  /**
+   * Record the serviceUrl we observed on an inbound activity for this
+   * channel/conversation. On the next outbound post to the same conversation,
+   * we will post against this serviceUrl instead of the configured default so
+   * reply lookups hit the same regional Bot Framework endpoint.
+   */
+  recordInboundServiceUrl(channelId: string, serviceUrl: string | undefined): void {
+    const normalized = normalizeServiceUrl(serviceUrl);
+    if (!normalized || !channelId) {
+      return;
+    }
+    const existing = this.channelServiceUrls.get(channelId);
+    if (existing === normalized) {
+      return;
+    }
+    this.channelServiceUrls.set(channelId, normalized);
+    if (this.channelServiceUrls.size > EcsTeamsChannels.CHANNEL_SERVICE_URL_MAX_ENTRIES) {
+      const firstKey = this.channelServiceUrls.keys().next().value;
+      if (firstKey !== undefined) {
+        this.channelServiceUrls.delete(firstKey);
+      }
+    }
+    console.info(`[ecs-teams] inboundServiceUrl channelId=${channelId} serviceUrl=${normalized}`);
+  }
+
+  /** Return the cached inbound serviceUrl for a channel, if any. */
+  private resolveServiceUrlFor(channelId: string): string | undefined {
+    return this.channelServiceUrls.get(channelId);
   }
 
   isEcsChannel(id: string): boolean {
@@ -323,8 +393,9 @@ export class EcsTeamsChannels {
     title?: string,
     replyToId?: string,
   ): Promise<TeamsPostResult> {
+    const serviceUrl = this.resolveServiceUrlFor(channelId);
     try {
-      const result = await botSend(this.creds, channelId, text, replyToId);
+      const result = await botSend(this.creds, channelId, text, replyToId, serviceUrl);
       // Dynamically register any channel we successfully post to so
       // isEcsChannel() recognizes project/venture channels across all instances.
       getKnownTeamsChannelIds().add(channelId);
@@ -347,7 +418,7 @@ export class EcsTeamsChannels {
         const alternates = this.replyCandidatesByPrimary.get(replyToId) ?? [];
         for (const alt of alternates) {
           try {
-            const altResult = await botSend(this.creds, channelId, text, alt);
+            const altResult = await botSend(this.creds, channelId, text, alt, serviceUrl);
             console.info(`[ecs-teams] reply ok via alternate=${alt} (primary=${replyToId} 404'd)`);
             getKnownTeamsChannelIds().add(channelId);
             this.rememberReplyCandidates(altResult.id, altResult);
@@ -368,10 +439,25 @@ export class EcsTeamsChannels {
           }
         }
 
+        // With fallback-root OFF (default), log the full diagnostic and
+        // bubble the error. The markDeadThread/onRootFallback wiring is only
+        // used when the flag is explicitly enabled. Replies should now
+        // always target a messageId OpenClaw itself posted as root, so a
+        // legitimate 404 here is a real symptom we want surfaced, not
+        // papered over by posting a fresh root and re-indexing.
+        if (!fallbackRootOn404Enabled()) {
+          const base = serviceUrl ?? normalizeServiceUrl(this.creds.serviceUrl) ?? "";
+          const replyUrl = `${base}/v3/conversations/${encodeURIComponent(channelId)}/activities`;
+          console.warn(
+            `[ecs-teams] reply 404 and fallback-root disabled: replyUrl=${replyUrl} replyToId=${replyToId} configuredServiceUrl=${this.creds.serviceUrl} cachedServiceUrl=${serviceUrl ?? "<none>"} respBody=${message}`,
+          );
+          throw err;
+        }
+
         this.handleDeadThread(channelId, replyToId, message);
         // Retry once as a root post so the status update still lands in the channel.
         try {
-          const result = await botSend(this.creds, channelId, text);
+          const result = await botSend(this.creds, channelId, text, undefined, serviceUrl);
           getKnownTeamsChannelIds().add(channelId);
           this.rememberReplyCandidates(result.id, result);
           if (this.onPostCallback) {

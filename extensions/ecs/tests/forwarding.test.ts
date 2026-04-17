@@ -192,23 +192,46 @@ describe("ECS before_dispatch forwarding", () => {
     );
   });
 
-  it("falls back to subagent.run when queueMessage reports no active run", async () => {
+  it("falls back to loopback HTTP inject when queueMessage reports no active run", async () => {
     const { api, hooks, queueMessage, run } = createApi(makeConfig());
     queueMessage.mockResolvedValue({ queued: false, reason: "no_active_run" });
+    const fetchMock = vi.fn().mockResolvedValue({ status: 202 });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    ecsPlugin.register(api);
-    const hook = hooks.find((h) => h.hookName === "before_dispatch");
+    try {
+      ecsPlugin.register(api);
+      // Fire gateway_start so the plugin captures the loopback port used by
+      // the forwarder to POST /__internal/ecs/inject.
+      const gatewayStart = hooks.find((h) => h.hookName === "gateway_start");
+      await gatewayStart!.handler({ port: 54321 } as never, {} as never);
 
-    const result = await hook!.handler(
-      { content: "hello", senderId: "human@example.com" } as never,
-      { sessionKey: `agent:main:msteams:default:thread:${threadId}` } as never,
-    );
-    expect(result).toEqual({ handled: true });
+      const hook = hooks.find((h) => h.hookName === "before_dispatch");
+      const result = await hook!.handler(
+        { content: "hello", senderId: "human@example.com" } as never,
+        { sessionKey: `agent:main:msteams:default:thread:${threadId}` } as never,
+      );
+      expect(result).toEqual({ handled: true });
 
-    await new Promise((r) => setImmediate(r));
+      // Let queueMessage settle, then the follow-up fetch.
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
 
-    expect(queueMessage).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith(expect.objectContaining({ sessionKey, deliver: false }));
+      expect(queueMessage).toHaveBeenCalledTimes(1);
+      // run() must NOT be called directly from the hook stack anymore — the
+      // loopback handler takes ownership of attaching the fresh run off a
+      // separate HTTP request scope so the session write lock can't deadlock.
+      expect(run).not.toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://127.0.0.1:54321/__internal/ecs/inject",
+        expect.objectContaining({
+          method: "POST",
+          body: expect.stringContaining(sessionKey),
+        }),
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("still forwards when the thread has been flagged dead, and skips the Teams ACK", async () => {

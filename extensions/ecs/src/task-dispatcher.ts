@@ -157,21 +157,38 @@ export async function dispatchEcsTask(
       deps.teams.registerChannel(task.teamsChannelId);
     }
 
-    // Register the control plane's Teams thread ID (from dispatch_payload)
-    // so inbound replies in that thread are routed to the agent session.
-    if (task.teamsThreadId) {
-      deps.tracker.setTeamsMessage(task.taskId, task.teamsThreadId);
-    }
-
-    // Post OpenClaw's task assignment to Teams.  When the control plane
-    // already created a thread (teamsThreadId), reply to it instead of
-    // creating a second root message.
+    // OpenClaw owns Teams thread creation end-to-end: we post the "Task
+    // Assigned" card as a new root, capture the messageId we minted, index
+    // it on the tracker, and notify the ECS control plane so the dashboard
+    // can deep-link. This replaces the prior "reply to control-plane's
+    // teamsThreadId" path, which reliably 404s when the control plane's
+    // thread was minted at a different regional Bot Framework endpoint
+    // than our outbound creds.serviceUrl.
     if (deps.teams) {
-      const teamsResult = await deps.teams.postTaskAssigned(task, undefined, task.teamsThreadId);
-      // Only index the message ID when it is a new root (no existing thread).
-      // When replying, the root thread ID is already indexed above.
-      if (teamsResult.messageId && !task.teamsThreadId) {
+      let teamsResult = await deps.teams.postTaskAssigned(task, undefined, undefined);
+      if (!teamsResult.messageId) {
+        // Azure production bug (MS-Teams-Samples #1561) occasionally returns
+        // a 2xx with an empty body for proactive activity POSTs. Retry once;
+        // a second empty response is almost certainly terminal so we log
+        // and continue without indexing.
+        console.warn(
+          `[ecs] Task Assigned root returned empty messageId for taskId=${task.taskId}; retrying once`,
+        );
+        teamsResult = await deps.teams.postTaskAssigned(task, undefined, undefined);
+      }
+      if (teamsResult.messageId) {
         deps.tracker.setTeamsMessage(task.taskId, teamsResult.messageId);
+        if (teamsResult.channelId) {
+          await deps.callback.reportTeamsThreadCreated({
+            agent_task_id: task.taskId,
+            teams_thread_id: teamsResult.messageId,
+            teams_channel_id: teamsResult.channelId,
+          });
+        }
+      } else {
+        console.warn(
+          `[ecs] Task Assigned root returned empty messageId after retry for taskId=${task.taskId}; thread will be unindexed until a later activity`,
+        );
       }
     }
 

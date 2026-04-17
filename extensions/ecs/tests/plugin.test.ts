@@ -242,11 +242,24 @@ describe("ECS plugin registration", () => {
     ]);
     expect(tools[0].optional).toBe(false);
 
-    // Should register 1 HTTP route.
-    expect(httpRoutes).toHaveLength(1);
-    expect(httpRoutes[0].path).toBe("/ecs");
-    expect(httpRoutes[0].match).toBe("prefix");
-    expect(httpRoutes[0].auth).toBe("gateway");
+    // Should register 2 HTTP routes: the public /ecs API plus the loopback
+    // /__internal/ecs/inject endpoint used by the before_dispatch forwarder
+    // when the target session has no active streaming run.
+    expect(httpRoutes).toHaveLength(2);
+    const publicRoute = httpRoutes.find((r: { path: string }) => r.path === "/ecs");
+    if (!publicRoute) {
+      throw new Error("public /ecs route not registered");
+    }
+    expect(publicRoute.match).toBe("prefix");
+    expect(publicRoute.auth).toBe("gateway");
+    const injectRoute = httpRoutes.find(
+      (r: { path: string }) => r.path === "/__internal/ecs/inject",
+    );
+    if (!injectRoute) {
+      throw new Error("loopback inject route not registered");
+    }
+    expect(injectRoute.match).toBe("exact");
+    expect(injectRoute.auth).toBe("plugin");
   });
 
   it("tool factory produces tools with session context", () => {
