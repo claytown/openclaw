@@ -51,6 +51,7 @@ export function normalizeDispatchPayload(body: Record<string, unknown>): EcsTask
     idempotencyKey: typeof body.idempotencyKey === "string" ? body.idempotencyKey : undefined,
     teamsChannelId: typeof body.teams_channel_id === "string" ? body.teams_channel_id : undefined,
     teamsThreadId: typeof body.teams_thread_id === "string" ? body.teams_thread_id : undefined,
+    slug: typeof body.slug === "string" ? body.slug : undefined,
   };
 }
 

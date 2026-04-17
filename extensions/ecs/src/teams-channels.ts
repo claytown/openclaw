@@ -212,6 +212,25 @@ function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max - 3) + "..." : s;
 }
 
+/**
+ * The `[Agent: <slug>]` prefix humans see on every task-scoped Teams post in
+ * the venture channel. The flat-roots delivery model (Bot Framework cannot
+ * reliably thread channel replies, verified over three prior fixes) means
+ * every task message lands as a fresh root; the prefix is what lets humans
+ * filter and search by task.
+ *
+ * Priority order is: task.slug (populated by the control plane when
+ * available) → task.assignedAgentId (always present for dispatched tasks) →
+ * "coding" (safety net; dispatchEcsTask also defaults agentId to "coding").
+ */
+export function agentSlug(task: Pick<EcsTask, "slug" | "assignedAgentId">): string {
+  return task.slug ?? task.assignedAgentId ?? "coding";
+}
+
+function prefixed(slug: string, body: string): string {
+  return `**[Agent: ${slug}]**\n\n${body}`;
+}
+
 function formatDuration(ms: number): string {
   const secs = Math.floor(ms / 1000);
   if (secs < 60) {
@@ -234,6 +253,8 @@ export type TeamsPostInfo = {
   messageId?: string;
   title?: string;
   content?: string;
+  /** Task id when the post is task-scoped. Used by the index.ts setOnPost handler to accumulate every posted messageId in the tracker's teamsMessageIds[] for inbound reply routing. */
+  taskId?: string;
 };
 
 // --- Shared channel set (survives multi-instance plugin loading) ---
@@ -408,6 +429,7 @@ export class EcsTeamsChannels {
     text: string,
     title?: string,
     replyToId?: string,
+    taskId?: string,
   ): Promise<TeamsPostResult> {
     const serviceUrl = this.resolveServiceUrlFor(channelId);
     console.log(
@@ -441,6 +463,7 @@ export class EcsTeamsChannels {
           messageId: selector.value,
           title,
           content: text,
+          taskId,
         });
       }
       return { messageId: selector.value, channelId };
@@ -464,6 +487,7 @@ export class EcsTeamsChannels {
                 messageId: altSelector.value,
                 title,
                 content: text,
+                taskId,
               });
             }
             return { messageId: altSelector.value, channelId };
@@ -506,6 +530,7 @@ export class EcsTeamsChannels {
               messageId: fallbackSelector.value,
               title,
               content: text,
+              taskId,
             });
           }
           if (this.onRootFallbackCallback) {
@@ -564,11 +589,7 @@ export class EcsTeamsChannels {
 
   // --- Task lifecycle ---
 
-  async postTaskAssigned(
-    task: EcsTask,
-    projectId?: string,
-    threadId?: string,
-  ): Promise<TeamsPostResult> {
+  async postTaskAssigned(task: EcsTask, projectId?: string): Promise<TeamsPostResult> {
     const channelId =
       task.teamsChannelId ?? (await this.resolveChannel(projectId ?? task.projectId));
     const text = [
@@ -579,13 +600,19 @@ export class EcsTeamsChannels {
       "",
       truncate(task.description, 800),
     ].join("\n");
-    return this.post(channelId, text, `Task Assigned: ${task.title}`, threadId);
+    return this.post(
+      channelId,
+      prefixed(agentSlug(task), text),
+      `Task Assigned: ${task.title}`,
+      undefined,
+      task.taskId,
+    );
   }
 
   async postStatusUpdate(
     update: EcsStatusUpdate,
+    slug: string,
     projectId?: string,
-    threadId?: string,
     taskChannelId?: string,
   ): Promise<TeamsPostResult> {
     const channelId = taskChannelId ?? (await this.resolveChannel(projectId));
@@ -598,11 +625,18 @@ export class EcsTeamsChannels {
     ]
       .filter(Boolean)
       .join("\n");
-    return this.post(channelId, text, `Status: ${update.status}`, threadId);
+    return this.post(
+      channelId,
+      prefixed(slug, text),
+      `Status: ${update.status}`,
+      undefined,
+      update.taskId,
+    );
   }
 
   async postTaskCompleted(
     completion: EcsTaskCompletion,
+    slug: string,
     projectId?: string,
     taskChannelId?: string,
   ): Promise<TeamsPostResult> {
@@ -617,18 +651,19 @@ export class EcsTeamsChannels {
       "",
       truncate(completion.summary, 800),
     ].join("\n");
-
-    // Reply in the existing thread when available; otherwise post as root.
-    if (completion.threadId) {
-      return this.postToThread(channelId, completion.threadId, text);
-    }
-    return this.post(channelId, text, `Task ${label}: ${completion.taskId}`);
+    return this.post(
+      channelId,
+      prefixed(slug, text),
+      `Task ${label}: ${completion.taskId}`,
+      undefined,
+      completion.taskId,
+    );
   }
 
   async postQuestion(
     question: EcsQuestion,
+    slug: string,
     projectId?: string,
-    threadId?: string,
     taskChannelId?: string,
   ): Promise<TeamsPostResult> {
     const channelId = taskChannelId ?? (await this.resolveChannel(projectId));
@@ -642,13 +677,13 @@ export class EcsTeamsChannels {
     ]
       .filter(Boolean)
       .join("\n");
-    return this.post(channelId, text, "Question", threadId);
+    return this.post(channelId, prefixed(slug, text), "Question", undefined, question.taskId);
   }
 
   async postQuestionTimeout(
     question: EcsQuestion,
+    slug: string,
     projectId?: string,
-    threadId?: string,
     taskChannelId?: string,
   ): Promise<TeamsPostResult> {
     const channelId = taskChannelId ?? (await this.resolveChannel(projectId));
@@ -659,13 +694,19 @@ export class EcsTeamsChannels {
       "",
       `> ${truncate(question.question, 600)}`,
     ].join("\n");
-    return this.post(channelId, text, "Question Timeout", threadId);
+    return this.post(
+      channelId,
+      prefixed(slug, text),
+      "Question Timeout",
+      undefined,
+      question.taskId,
+    );
   }
 
   async postIssue(
     issue: EcsIssue,
+    slug: string,
     projectId?: string,
-    threadId?: string,
     taskChannelId?: string,
   ): Promise<TeamsPostResult> {
     const channelId = taskChannelId ?? (await this.resolveChannel(projectId));
@@ -682,24 +723,34 @@ export class EcsTeamsChannels {
     ]
       .filter(Boolean)
       .join("\n");
-    return this.post(channelId, text, `Issue: ${issue.title}`, threadId);
+    return this.post(
+      channelId,
+      prefixed(slug, text),
+      `Issue: ${issue.title}`,
+      undefined,
+      issue.taskId,
+    );
   }
 
   async postToThread(channelId: string, messageId: string, text: string): Promise<TeamsPostResult> {
     return this.post(channelId, truncate(text, 2000), undefined, messageId);
   }
 
+  /**
+   * Post the agent's human-facing reply as a fresh root in the venture
+   * channel. Bot Framework cannot reliably thread channel messages, so
+   * "replyToThread" is a historical name: in practice the reply posts as
+   * a new root and humans correlate it via the `[Agent: <slug>]` prefix.
+   */
   async postReplyToThread(
     text: string,
+    slug: string,
+    taskId: string,
     projectId?: string,
-    threadId?: string,
     taskChannelId?: string,
   ): Promise<TeamsPostResult> {
-    if (!threadId) {
-      return {};
-    }
     const channelId = taskChannelId ?? (await this.resolveChannel(projectId));
-    return this.postToThread(channelId, threadId, text);
+    return this.post(channelId, prefixed(slug, truncate(text, 2000)), undefined, undefined, taskId);
   }
 
   async postSystemEvent(
@@ -708,10 +759,15 @@ export class EcsTeamsChannels {
       description?: string;
       fields?: Array<{ name: string; value: string }>;
     },
-    projectId?: string,
-    taskChannelId?: string,
+    opts?: {
+      projectId?: string;
+      taskChannelId?: string;
+      /** Present when the event is task-scoped (e.g. subagent_spawned). Omit for gateway-wide events like gateway_start. */
+      slug?: string;
+      taskId?: string;
+    },
   ): Promise<TeamsPostResult> {
-    const channelId = taskChannelId ?? (await this.resolveChannel(projectId));
+    const channelId = opts?.taskChannelId ?? (await this.resolveChannel(opts?.projectId));
     const lines = [`**${params.title}**`];
     if (params.description) {
       lines.push(params.description);
@@ -719,6 +775,8 @@ export class EcsTeamsChannels {
     if (params.fields) {
       lines.push(params.fields.map((f) => `**${f.name}:** ${f.value}`).join(" | "));
     }
-    return this.post(channelId, lines.join("\n"), params.title);
+    const body = lines.join("\n");
+    const text = opts?.slug ? prefixed(opts.slug, body) : body;
+    return this.post(channelId, text, params.title, undefined, opts?.taskId);
   }
 }

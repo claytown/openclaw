@@ -105,6 +105,14 @@ function buildAgentPrompt(task: EcsTask): string {
     "trailing `[message_id=<uuid>]` marker. If you later see the same",
     "`message_id` in an `ecs_check_inbox` response, treat it as the same",
     "message and do not double-reply.",
+    "",
+    "## Teams Delivery",
+    "",
+    "Teams messages for your task appear as a flat stream of root messages in",
+    "the venture channel, each prefixed with `[Agent: <your-slug>]`. When you",
+    "call `ecs_thread_reply`, your response also posts as a new root prefixed",
+    "this way — humans see and can reply to it like any other message. There",
+    "is no visible thread hierarchy; rely on the prefix for context.",
   ];
 
   if (task.persona) {
@@ -156,39 +164,37 @@ export async function dispatchEcsTask(
       deps.teams.registerChannel(task.teamsChannelId);
     }
 
-    // OpenClaw owns Teams thread creation end-to-end: we post the "Task
-    // Assigned" card as a new root, capture the messageId we minted, index
-    // it on the tracker, and notify the ECS control plane so the dashboard
-    // can deep-link. This replaces the prior "reply to control-plane's
-    // teamsThreadId" path, which reliably 404s when the control plane's
-    // thread was minted at a different regional Bot Framework endpoint
-    // than our outbound creds.serviceUrl. The post + index happens BEFORE
-    // subagent.run so the subagent's first tool call (the system prompt
-    // instructs "Call ecs_status_update with status running before you
-    // begin work") can resolve teamsMessageId from the tracker instead of
-    // reading undefined and posting as a new root.
+    // OpenClaw owns the "Task Assigned" Teams root and every subsequent
+    // task-scoped post. Bot Framework cannot reliably thread channel
+    // replies, so every post lands as a fresh prefixed root; the
+    // setOnPost callback in index.ts accumulates each messageId in the
+    // tracker's teamsMessageIds[] so inbound replies to any root route
+    // back to this task. We still post + await the root here (before
+    // subagent.run) so the control plane gets reportTeamsThreadCreated
+    // with a real anchor for dashboard deep-links, and so the tracker
+    // has at least the first messageId indexed before any agent tool
+    // runs.
     if (deps.teams) {
-      let teamsResult = await deps.teams.postTaskAssigned(task, undefined, undefined);
+      let teamsResult = await deps.teams.postTaskAssigned(task);
       if (!teamsResult.messageId) {
         // Azure production bug (MS-Teams-Samples #1561) occasionally returns
         // a 2xx with an empty body for proactive activity POSTs. Retry once;
         // a second empty response is almost certainly terminal so we log
-        // and continue without indexing.
+        // and continue.
         console.warn(
           `[ecs] Task Assigned root returned empty messageId for taskId=${task.taskId}; retrying once`,
         );
-        teamsResult = await deps.teams.postTaskAssigned(task, undefined, undefined);
+        teamsResult = await deps.teams.postTaskAssigned(task);
       }
-      if (teamsResult.messageId) {
-        deps.tracker.setTeamsMessage(task.taskId, teamsResult.messageId);
-        if (teamsResult.channelId) {
-          await deps.callback.reportTeamsThreadCreated({
-            agent_task_id: task.taskId,
-            teams_thread_id: teamsResult.messageId,
-            teams_channel_id: teamsResult.channelId,
-          });
-        }
-      } else {
+      if (teamsResult.messageId && teamsResult.channelId) {
+        // setOnPost already called tracker.setTeamsMessage on success;
+        // notify the control plane for dashboard deep-linking.
+        await deps.callback.reportTeamsThreadCreated({
+          agent_task_id: task.taskId,
+          teams_thread_id: teamsResult.messageId,
+          teams_channel_id: teamsResult.channelId,
+        });
+      } else if (!teamsResult.messageId) {
         console.warn(
           `[ecs] Task Assigned root returned empty messageId after retry for taskId=${task.taskId}; thread will be unindexed until a later activity`,
         );

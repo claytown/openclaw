@@ -17,7 +17,7 @@ import { clearActivePersona } from "./src/persona-registry.js";
 import { ProjectChannelManager } from "./src/project-channel-manager.js";
 import { getEcsQuestionRelay } from "./src/question-relay.js";
 import { getEcsTaskTracker } from "./src/task-tracker.js";
-import { EcsTeamsChannels } from "./src/teams-channels.js";
+import { agentSlug, EcsTeamsChannels } from "./src/teams-channels.js";
 import { TeamsProjectChannelManager } from "./src/teams-project-channel-manager.js";
 import {
   createEcsAskQuestionTool,
@@ -182,6 +182,24 @@ const ecsPlugin = {
       if (seedChannels.length > 0) {
         log.info(`[ecs] seeded ${seedChannels.length} project channel(s) from config`);
       }
+
+      // Accumulate every task-scoped Teams post into the tracker's
+      // teamsMessageIds[]. Inbound replies land with a parent-message id
+      // that matches whichever root the human replied to; walking
+      // byTeamsMessageId resolves any of them back to the task. See
+      // docs/channels/msteams.md for why we can't reliably deliver
+      // threaded replies via Bot Framework today.
+      teams.setOnPost((info) => {
+        if (!info.taskId || !info.messageId) {
+          return;
+        }
+        tracker.setTeamsMessage(info.taskId, info.messageId);
+        const entry = tracker.getByTaskId(info.taskId);
+        const total = entry?.teamsMessageIds?.length ?? 0;
+        log.info(
+          `[ecs-tracker] accumulated: taskId=${info.taskId} messageId=${info.messageId} totalForTask=${total}`,
+        );
+      });
 
       // When Teams reports a thread is gone, flag it so outbound replies stop
       // targeting it. Inbound routing by thread id is intentionally preserved
@@ -384,7 +402,8 @@ const ecsPlugin = {
         await discord.postTaskCompleted(completion, active.task.projectId);
         if (teams) {
           await teams.postTaskCompleted(
-            { ...completion, threadId: active.teamsMessageId },
+            completion,
+            agentSlug(active.task),
             active.task.projectId,
             active.teamsChannelId,
           );
@@ -577,17 +596,18 @@ const ecsPlugin = {
             }
           })();
 
-          // Immediate thread ACK so the human sees the message landed even if
-          // the agent's reply is delayed by lock contention or a long turn.
-          // Skip when the thread has been flagged dead for outbound posts —
-          // replying to a dead thread would just 404 again. The agent's own
-          // reply will land through whatever outbound path still works.
-          if (teams && activeTask.teamsMessageId && !activeTask.teamsThreadIsDead) {
+          // Immediate ACK so the human sees the message landed even if the
+          // agent's reply is delayed by lock contention or a long turn. In
+          // the flat-roots delivery model this ACK posts as its own
+          // prefixed root in the venture channel; the [Agent: <slug>]
+          // prefix is the correlation cue for humans.
+          if (teams) {
             void teams
               .postReplyToThread(
                 "_Got it — working on a reply._",
+                agentSlug(activeTask.task),
+                activeTask.task.taskId,
                 activeTask.task.projectId,
-                activeTask.teamsMessageId,
                 activeTask.teamsChannelId,
               )
               .catch((err) => log.warn(`[ecs] thread ack post failed: ${err}`));
@@ -611,6 +631,8 @@ const ecsPlugin = {
         };
         await discord.postSystemEvent(sysEvent);
         if (teams) {
+          // Gateway-wide event, no task context — posts to the default
+          // Teams channel as an un-prefixed root.
           await teams.postSystemEvent(sysEvent);
         }
       },
@@ -637,7 +659,12 @@ const ecsPlugin = {
         };
         await discord.postSystemEvent(sysEvent, ecsTask.task.projectId);
         if (teams) {
-          await teams.postSystemEvent(sysEvent, ecsTask.task.projectId, ecsTask.teamsChannelId);
+          await teams.postSystemEvent(sysEvent, {
+            projectId: ecsTask.task.projectId,
+            taskChannelId: ecsTask.teamsChannelId,
+            slug: agentSlug(ecsTask.task),
+            taskId: ecsTask.task.taskId,
+          });
         }
       },
       { priority: 200 },

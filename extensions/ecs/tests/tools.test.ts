@@ -240,6 +240,7 @@ describe("ecs_ask_question", () => {
       "thread-1",
       "safeplate",
       undefined,
+      undefined,
     );
   });
 });
@@ -337,8 +338,9 @@ describe("ecs_thread_reply", () => {
     expect(parsed.teamsMessageId).toBe("msg-teams-thread-1");
     expect(mocks.postReplyToThread).toHaveBeenCalledWith(
       "Running verification now.",
+      "coding",
+      "task-1",
       undefined,
-      "teams-msg-1",
       undefined,
     );
   });

@@ -11,7 +11,7 @@ import { setActivePersona } from "./persona-registry.js";
 import { validatePersona } from "./persona.js";
 import type { EcsQuestionRelay } from "./question-relay.js";
 import type { EcsTaskTracker } from "./task-tracker.js";
-import type { EcsTeamsChannels } from "./teams-channels.js";
+import { agentSlug, type EcsTeamsChannels } from "./teams-channels.js";
 import type { EcsIssueSeverity, EcsQuestion, EcsStatusUpdate, EcsTaskStatus } from "./types.js";
 
 const ECS_TASK_STATUSES = ["accepted", "running", "blocked", "complete", "error"] as const;
@@ -170,13 +170,10 @@ export function createEcsStatusUpdateTool(deps: EcsToolDeps, ctx: EcsToolContext
                 details,
               });
 
-      const teamsThreadId = active?.teamsMessageId;
-      console.log(
-        `[ecs] status_update teams-target: teamsThreadId=${teamsThreadId ?? "<undef>"} activeHasTracker=${!!active} activeTeamsFlagDead=${active?.teamsThreadIsDead ?? "n/a"}`,
-      );
+      const slug = active ? agentSlug(active.task) : "coding";
       const [discordResult] = await Promise.all([
         deps.discord.postStatusUpdate(update, projectId),
-        deps.teams?.postStatusUpdate(update, projectId, teamsThreadId, active?.teamsChannelId),
+        deps.teams?.postStatusUpdate(update, slug, projectId, active?.teamsChannelId),
         callbackPromise,
       ]);
 
@@ -223,14 +220,15 @@ export function createEcsAskQuestionTool(deps: EcsToolDeps, ctx: EcsToolContext)
       const discordResult = await deps.discord.postQuestion(question, projectId);
       const threadId = discordResult.threadId;
 
-      // Also post to Teams (message ID used for thread replies).
+      // Also post to Teams. No threading — the message lands as a fresh root
+      // in the venture channel, prefixed with [Agent: <slug>].
       let teamsMessageId: string | undefined;
       if (deps.teams) {
-        const teamsThreadId = active?.teamsMessageId;
+        const slug = active ? agentSlug(active.task) : "coding";
         const teamsResult = await deps.teams.postQuestion(
           question,
+          slug,
           projectId,
-          teamsThreadId,
           active?.teamsChannelId,
         );
         teamsMessageId = teamsResult.messageId;
@@ -268,6 +266,7 @@ export function createEcsAskQuestionTool(deps: EcsToolDeps, ctx: EcsToolContext)
         questionKey,
         projectId,
         active?.teamsChannelId,
+        active ? agentSlug(active.task) : undefined,
       );
       relayPromises.push(mainPromise);
 
@@ -316,10 +315,10 @@ export function createEcsRaiseIssueTool(deps: EcsToolDeps, ctx: EcsToolContext):
         needsHuman: severity === "critical",
       };
 
-      const teamsThreadId = active?.teamsMessageId;
+      const slug = active ? agentSlug(active.task) : "coding";
       const [discordResult] = await Promise.all([
         deps.discord.postIssue(issue, projectId),
-        deps.teams?.postIssue(issue, projectId, teamsThreadId, active?.teamsChannelId),
+        deps.teams?.postIssue(issue, slug, projectId, active?.teamsChannelId),
       ]);
 
       return jsonResult({
@@ -380,14 +379,18 @@ export function createEcsThreadReplyTool(deps: EcsToolDeps, ctx: EcsToolContext)
         discordMessageId = discordResult.messageId ?? null;
       }
 
-      // Post to Teams thread.
-      const teamsThreadId = active?.teamsMessageId;
-      if (deps.teams && teamsThreadId) {
+      // Post the agent's reply to Teams. With the flat-roots delivery
+      // model, this posts as a new prefixed root in the venture channel
+      // rather than threading under a prior message. Require an active
+      // task so we have a taskId to accumulate against.
+      if (deps.teams && active) {
+        const slug = agentSlug(active.task);
         const teamsResult = await deps.teams.postReplyToThread(
           message,
+          slug,
+          active.task.taskId,
           projectId,
-          teamsThreadId,
-          active?.teamsChannelId,
+          active.teamsChannelId,
         );
         teamsMessageId = teamsResult.messageId ?? null;
       }

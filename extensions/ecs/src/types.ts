@@ -23,6 +23,8 @@ export type EcsTask = {
   teamsChannelId?: string;
   /** Teams thread ID from the control plane's dispatch notification. */
   teamsThreadId?: string;
+  /** URL-safe short identifier for the task. Used as the [Agent: <slug>] prefix on Teams posts so humans can filter the venture channel's flat stream. */
+  slug?: string;
 };
 
 export type EcsTaskAck = {

@@ -11,12 +11,6 @@ function makeActivityOk(id: string): Response {
   return new Response(JSON.stringify({ id }), { status: 200 });
 }
 
-function make404(): Response {
-  return new Response(JSON.stringify({ error: { code: "ActivityNotFoundInConversation" } }), {
-    status: 404,
-  });
-}
-
 /**
  * botSend caches the bot token at module scope, so tests cannot rely on a
  * predictable number of fetch calls. Route by URL instead: OAuth token
@@ -115,56 +109,10 @@ describe("EcsTeamsChannels serviceUrl selection", () => {
   });
 });
 
-describe("EcsTeamsChannels 404 fallback feature flag", () => {
-  const originalFetch = globalThis.fetch;
-
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-    delete process.env.ECS_TEAMS_FALLBACK_ROOT_ON_404;
-  });
-
-  it("bubbles the 404 instead of posting a fresh root when the flag is off", async () => {
-    process.env.ECS_TEAMS_FALLBACK_ROOT_ON_404 = "false";
-    const teams = new EcsTeamsChannels(creds, cfg);
-    const onDead = vi.fn();
-    const onRoot = vi.fn();
-    teams.setOnDeadThread(onDead);
-    teams.setOnRootFallback(onRoot);
-
-    const fetchMock = routedFetchMock([() => make404()]);
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
-
-    await expect(teams.postReplyToThread("hi", undefined, "msg-root-1")).rejects.toThrow(
-      /ActivityNotFoundInConversation/,
-    );
-    expect(onDead).not.toHaveBeenCalled();
-    expect(onRoot).not.toHaveBeenCalled();
-    // Exactly one activity POST attempted (the 404); no fresh root follow-up.
-    const activityCalls = fetchMock.mock.calls.filter(
-      (c) => !String(c[0]).includes("login.microsoftonline.com"),
-    );
-    expect(activityCalls).toHaveLength(1);
-  });
-
-  it("posts a fresh root and notifies callbacks when the flag is on", async () => {
-    process.env.ECS_TEAMS_FALLBACK_ROOT_ON_404 = "true";
-    const teams = new EcsTeamsChannels(creds, cfg);
-    const onDead = vi.fn();
-    const onRoot = vi.fn();
-    teams.setOnDeadThread(onDead);
-    teams.setOnRootFallback(onRoot);
-
-    const fetchMock = routedFetchMock([() => make404(), () => makeActivityOk("msg-fresh-1")]);
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
-
-    const result = await teams.postReplyToThread("hi", undefined, "msg-root-1");
-    expect(result.messageId).toBe("msg-fresh-1");
-    expect(onDead).toHaveBeenCalledTimes(1);
-    expect(onRoot).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replyToId: "msg-root-1",
-        newMessageId: "msg-fresh-1",
-      }),
-    );
-  });
-});
+// The "404 fallback feature flag" describe block that lived here was removed
+// when postReplyToThread stopped accepting a threadId. No public method now
+// passes replyToId, so the retry ladder + onDeadThread + onRootFallback paths
+// in EcsTeamsChannels.post() are intentionally unreachable from the public
+// API. The ladder code is preserved as documented dead code for future Bot
+// Framework pivots (see collectReplyCandidates, bestThreadSelector, and the
+// `fallbackRootOn404Enabled` env flag in src/teams-channels.ts).

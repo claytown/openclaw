@@ -41,6 +41,8 @@ vi.mock("../src/teams-channels.js", async () => {
   }
   return {
     EcsTeamsChannels,
+    agentSlug: (t: { slug?: string; assignedAgentId?: string }) =>
+      t.slug ?? t.assignedAgentId ?? "coding",
     __mocks: {
       postReplyToThread,
       postTaskAssigned,
@@ -222,8 +224,9 @@ describe("ECS before_dispatch forwarding", () => {
       };
       expect(teamsMocks.__mocks.postReplyToThread).toHaveBeenCalledWith(
         expect.stringContaining("Got it"),
+        "coding",
+        taskId,
         "proj-1",
-        threadId,
         undefined,
       );
     } finally {
@@ -263,9 +266,13 @@ describe("ECS before_dispatch forwarding", () => {
     }
   });
 
-  it("still forwards when the thread has been flagged dead, and skips the Teams ACK", async () => {
-    // Simulate an outbound 404 that flipped the tracker's dead-thread flag.
-    // Inbound routing must still resolve so the human reply reaches the agent.
+  it("still forwards and posts the ACK as a fresh root even when the dead-thread flag is set", async () => {
+    // The dead-thread flag predates the flat-roots pivot. When threading was
+    // active, this flag suppressed the ACK to avoid re-posting against a
+    // known-404 parent. Under flat-roots every task post lands as a new
+    // root in the venture channel, so the flag is no longer a gate for
+    // outbound posts — it stays on EcsActiveTask for legacy observability
+    // but this test pins down that it does NOT suppress the ACK anymore.
     getEcsTaskTracker().markDeadThread(taskId);
 
     const { api, hooks, queueMessage } = createApi(makeConfig());
@@ -292,8 +299,13 @@ describe("ECS before_dispatch forwarding", () => {
     const teamsMocks = (await import("../src/teams-channels.js")) as unknown as {
       __mocks: { postReplyToThread: ReturnType<typeof vi.fn> };
     };
-    // Posting to a known-dead thread would 404 again — suppress it.
-    expect(teamsMocks.__mocks.postReplyToThread).not.toHaveBeenCalled();
+    expect(teamsMocks.__mocks.postReplyToThread).toHaveBeenCalledWith(
+      expect.stringContaining("Got it"),
+      "coding",
+      taskId,
+      "proj-1",
+      undefined,
+    );
   });
 
   it("does not mark the Teams thread dead when forwarding fails with an arbitrary error", async () => {

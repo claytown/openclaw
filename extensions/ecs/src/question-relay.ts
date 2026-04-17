@@ -79,6 +79,7 @@ export class EcsQuestionRelay {
     threadId: string,
     projectId?: string,
     taskChannelId?: string,
+    slug?: string,
   ): Promise<QuestionResult> {
     return new Promise<QuestionResult>((resolve) => {
       const timeoutMs = question.timeoutMs ?? this.defaultTimeoutMs;
@@ -91,7 +92,12 @@ export class EcsQuestionRelay {
         if (this.escalateOnTimeout) {
           await this.discord.postQuestionTimeout(question, projectId);
           if (this.teams) {
-            await this.teams.postQuestionTimeout(question, projectId, undefined, taskChannelId);
+            await this.teams.postQuestionTimeout(
+              question,
+              slug ?? "coding",
+              projectId,
+              taskChannelId,
+            );
           }
           escalated = true;
         }
