@@ -549,8 +549,9 @@ export class EcsTeamsChannels {
     update: EcsStatusUpdate,
     projectId?: string,
     threadId?: string,
+    taskChannelId?: string,
   ): Promise<TeamsPostResult> {
-    const channelId = await this.resolveChannel(projectId);
+    const channelId = taskChannelId ?? (await this.resolveChannel(projectId));
     const pct = update.progressPct !== undefined ? ` (${update.progressPct}%)` : "";
     const text = [
       `**Status Update** | \`${update.taskId}\` | ${update.status}${pct}`,
@@ -566,8 +567,9 @@ export class EcsTeamsChannels {
   async postTaskCompleted(
     completion: EcsTaskCompletion,
     projectId?: string,
+    taskChannelId?: string,
   ): Promise<TeamsPostResult> {
-    const channelId = await this.resolveChannel(projectId);
+    const channelId = taskChannelId ?? (await this.resolveChannel(projectId));
     const isError = completion.status === "error" || completion.status === "cancelled";
     const icon = isError ? "🔴" : "🟢";
     const label = isError ? "Failed" : "Completed";
@@ -590,8 +592,9 @@ export class EcsTeamsChannels {
     question: EcsQuestion,
     projectId?: string,
     threadId?: string,
+    taskChannelId?: string,
   ): Promise<TeamsPostResult> {
-    const channelId = await this.resolveChannel(projectId);
+    const channelId = taskChannelId ?? (await this.resolveChannel(projectId));
     const text = [
       `**❓ Question** | \`${question.taskId}\``,
       "---",
@@ -609,8 +612,9 @@ export class EcsTeamsChannels {
     question: EcsQuestion,
     projectId?: string,
     threadId?: string,
+    taskChannelId?: string,
   ): Promise<TeamsPostResult> {
-    const channelId = await this.resolveChannel(projectId);
+    const channelId = taskChannelId ?? (await this.resolveChannel(projectId));
     const text = [
       `**⚠️ Unanswered Question Escalation** | \`${question.taskId}\``,
       "---",
@@ -625,8 +629,9 @@ export class EcsTeamsChannels {
     issue: EcsIssue,
     projectId?: string,
     threadId?: string,
+    taskChannelId?: string,
   ): Promise<TeamsPostResult> {
-    const channelId = await this.resolveChannel(projectId);
+    const channelId = taskChannelId ?? (await this.resolveChannel(projectId));
     const icon = issue.severity === "critical" ? "🔴" : issue.severity === "error" ? "🟠" : "🟡";
     const text = [
       `${icon} **Issue: ${issue.title}** | \`${issue.taskId}\` | ${issue.severity}`,
@@ -651,11 +656,12 @@ export class EcsTeamsChannels {
     text: string,
     projectId?: string,
     threadId?: string,
+    taskChannelId?: string,
   ): Promise<TeamsPostResult> {
     if (!threadId) {
       return {};
     }
-    const channelId = await this.resolveChannel(projectId);
+    const channelId = taskChannelId ?? (await this.resolveChannel(projectId));
     return this.postToThread(channelId, threadId, text);
   }
 
@@ -666,8 +672,9 @@ export class EcsTeamsChannels {
       fields?: Array<{ name: string; value: string }>;
     },
     projectId?: string,
+    taskChannelId?: string,
   ): Promise<TeamsPostResult> {
-    const channelId = await this.resolveChannel(projectId);
+    const channelId = taskChannelId ?? (await this.resolveChannel(projectId));
     const lines = [`**${params.title}**`];
     if (params.description) {
       lines.push(params.description);

@@ -239,6 +239,7 @@ describe("ecs_ask_question", () => {
       expect.anything(),
       "thread-1",
       "safeplate",
+      undefined,
     );
   });
 });
@@ -338,6 +339,7 @@ describe("ecs_thread_reply", () => {
       "Running verification now.",
       undefined,
       "teams-msg-1",
+      undefined,
     );
   });
 

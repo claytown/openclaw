@@ -386,6 +386,7 @@ const ecsPlugin = {
           await teams.postTaskCompleted(
             { ...completion, threadId: active.teamsMessageId },
             active.task.projectId,
+            active.teamsChannelId,
           );
         }
 
@@ -587,6 +588,7 @@ const ecsPlugin = {
                 "_Got it — working on a reply._",
                 activeTask.task.projectId,
                 activeTask.teamsMessageId,
+                activeTask.teamsChannelId,
               )
               .catch((err) => log.warn(`[ecs] thread ack post failed: ${err}`));
           }
@@ -635,7 +637,7 @@ const ecsPlugin = {
         };
         await discord.postSystemEvent(sysEvent, ecsTask.task.projectId);
         if (teams) {
-          await teams.postSystemEvent(sysEvent, ecsTask.task.projectId);
+          await teams.postSystemEvent(sysEvent, ecsTask.task.projectId, ecsTask.teamsChannelId);
         }
       },
       { priority: 200 },

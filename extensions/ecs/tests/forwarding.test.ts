@@ -224,6 +224,7 @@ describe("ECS before_dispatch forwarding", () => {
         expect.stringContaining("Got it"),
         "proj-1",
         threadId,
+        undefined,
       );
     } finally {
       globalThis.fetch = originalFetch;

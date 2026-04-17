@@ -176,7 +176,7 @@ export function createEcsStatusUpdateTool(deps: EcsToolDeps, ctx: EcsToolContext
       );
       const [discordResult] = await Promise.all([
         deps.discord.postStatusUpdate(update, projectId),
-        deps.teams?.postStatusUpdate(update, projectId, teamsThreadId),
+        deps.teams?.postStatusUpdate(update, projectId, teamsThreadId, active?.teamsChannelId),
         callbackPromise,
       ]);
 
@@ -227,7 +227,12 @@ export function createEcsAskQuestionTool(deps: EcsToolDeps, ctx: EcsToolContext)
       let teamsMessageId: string | undefined;
       if (deps.teams) {
         const teamsThreadId = active?.teamsMessageId;
-        const teamsResult = await deps.teams.postQuestion(question, projectId, teamsThreadId);
+        const teamsResult = await deps.teams.postQuestion(
+          question,
+          projectId,
+          teamsThreadId,
+          active?.teamsChannelId,
+        );
         teamsMessageId = teamsResult.messageId;
       }
 
@@ -262,6 +267,7 @@ export function createEcsAskQuestionTool(deps: EcsToolDeps, ctx: EcsToolContext)
         question,
         questionKey,
         projectId,
+        active?.teamsChannelId,
       );
       relayPromises.push(mainPromise);
 
@@ -313,7 +319,7 @@ export function createEcsRaiseIssueTool(deps: EcsToolDeps, ctx: EcsToolContext):
       const teamsThreadId = active?.teamsMessageId;
       const [discordResult] = await Promise.all([
         deps.discord.postIssue(issue, projectId),
-        deps.teams?.postIssue(issue, projectId, teamsThreadId),
+        deps.teams?.postIssue(issue, projectId, teamsThreadId, active?.teamsChannelId),
       ]);
 
       return jsonResult({
@@ -377,7 +383,12 @@ export function createEcsThreadReplyTool(deps: EcsToolDeps, ctx: EcsToolContext)
       // Post to Teams thread.
       const teamsThreadId = active?.teamsMessageId;
       if (deps.teams && teamsThreadId) {
-        const teamsResult = await deps.teams.postReplyToThread(message, projectId, teamsThreadId);
+        const teamsResult = await deps.teams.postReplyToThread(
+          message,
+          projectId,
+          teamsThreadId,
+          active?.teamsChannelId,
+        );
         teamsMessageId = teamsResult.messageId ?? null;
       }
 
