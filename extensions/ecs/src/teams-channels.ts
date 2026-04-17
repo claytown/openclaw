@@ -190,6 +190,22 @@ function collectReplyCandidates(
   return out;
 }
 
+/**
+ * The selector we store in the tracker as `teamsMessageId` and later hand
+ * back as `replyToId`. Teams' actual threading key in channels is
+ * `channelData.teamsMessageId`; the top-level activity `id` is accepted by
+ * Bot Framework's reply-lookup without a 404 but does not produce an
+ * inline-threaded render in the Teams UI. Mirror `collectReplyCandidates`
+ * priority order so root-post time and retry-ladder time agree.
+ */
+function bestThreadSelector(resp: BotFrameworkActivityResponse): { via: string; value: string } {
+  const candidates = collectReplyCandidates(resp);
+  if (candidates.length > 0) {
+    return candidates[0];
+  }
+  return { via: "id", value: resp.id };
+}
+
 // --- Helpers ---
 
 function truncate(s: string, max: number): string {
@@ -402,16 +418,32 @@ export class EcsTeamsChannels {
       // Dynamically register any channel we successfully post to so
       // isEcsChannel() recognizes project/venture channels across all instances.
       getKnownTeamsChannelIds().add(channelId);
-      this.rememberReplyCandidates(result.id, result);
+      // Pick the best selector for future replyToId use (Teams threads on
+      // channelData.teamsMessageId, not the activity's top-level id). Store
+      // alternates keyed against the chosen primary so the retry ladder
+      // still has fallbacks if Teams later rejects the primary.
+      const selector = bestThreadSelector(result);
+      this.rememberReplyCandidates(selector.value, result);
+      if (!replyToId) {
+        // Root post: the value we're about to return will land in the
+        // tracker as teamsMessageId and become the replyToId for every
+        // subsequent status/reply. Log the selector choice so prod can
+        // confirm we took the preferred path (not the top-level id
+        // fallback, which Bot Framework accepts without 404 but Teams
+        // doesn't actually thread under).
+        console.info(
+          `[ecs-teams] root stored: selectorUsed=${selector.via} teamsMessageId=${selector.value} fallbackId=${result.id}`,
+        );
+      }
       if (this.onPostCallback) {
         this.onPostCallback({
           channelId,
-          messageId: result.id,
+          messageId: selector.value,
           title,
           content: text,
         });
       }
-      return { messageId: result.id, channelId };
+      return { messageId: selector.value, channelId };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (replyToId && message.includes(THREAD_NOT_FOUND_MARKER)) {
@@ -424,16 +456,17 @@ export class EcsTeamsChannels {
             const altResult = await botSend(this.creds, channelId, text, alt, serviceUrl);
             console.info(`[ecs-teams] reply ok via alternate=${alt} (primary=${replyToId} 404'd)`);
             getKnownTeamsChannelIds().add(channelId);
-            this.rememberReplyCandidates(altResult.id, altResult);
+            const altSelector = bestThreadSelector(altResult);
+            this.rememberReplyCandidates(altSelector.value, altResult);
             if (this.onPostCallback) {
               this.onPostCallback({
                 channelId,
-                messageId: altResult.id,
+                messageId: altSelector.value,
                 title,
                 content: text,
               });
             }
-            return { messageId: altResult.id, channelId };
+            return { messageId: altSelector.value, channelId };
           } catch (altErr) {
             const altMsg = altErr instanceof Error ? altErr.message : String(altErr);
             console.warn(
@@ -462,11 +495,15 @@ export class EcsTeamsChannels {
         try {
           const result = await botSend(this.creds, channelId, text, undefined, serviceUrl);
           getKnownTeamsChannelIds().add(channelId);
-          this.rememberReplyCandidates(result.id, result);
+          const fallbackSelector = bestThreadSelector(result);
+          this.rememberReplyCandidates(fallbackSelector.value, result);
+          console.info(
+            `[ecs-teams] root stored (fallback): selectorUsed=${fallbackSelector.via} teamsMessageId=${fallbackSelector.value} fallbackId=${result.id}`,
+          );
           if (this.onPostCallback) {
             this.onPostCallback({
               channelId,
-              messageId: result.id,
+              messageId: fallbackSelector.value,
               title,
               content: text,
             });
@@ -476,7 +513,7 @@ export class EcsTeamsChannels {
               this.onRootFallbackCallback({
                 channelId,
                 replyToId,
-                newMessageId: result.id,
+                newMessageId: fallbackSelector.value,
               });
             } catch (cbErr) {
               console.warn(
@@ -484,7 +521,7 @@ export class EcsTeamsChannels {
               );
             }
           }
-          return { messageId: result.id, channelId };
+          return { messageId: fallbackSelector.value, channelId };
         } catch (retryErr) {
           const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
           console.warn(`[ecs-teams] root-post retry failed: ${retryMsg}`);
