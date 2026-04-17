@@ -183,18 +183,6 @@ const ecsPlugin = {
         log.info(`[ecs] seeded ${seedChannels.length} project channel(s) from config`);
       }
 
-      // Wire Teams posts to control plane.
-      teams.setOnPost((info) => {
-        void callback
-          .reportMessage({
-            channel_id: info.channelId,
-            direction: "outbound",
-            embed_title: info.title,
-            content: info.content,
-          })
-          .catch((err) => log.warn(`[ecs] teams-post callback failed: ${err}`));
-      });
-
       // When Teams reports a thread is gone, flag it so outbound replies stop
       // targeting it. Inbound routing by thread id is intentionally preserved
       // so human replies still reach the running session.
@@ -463,18 +451,6 @@ const ecsPlugin = {
             );
           }
         }
-
-        // Forward ECS-channel messages to the control plane.
-        if (isEcsDiscord || isEcsTeams) {
-          void callback
-            .reportMessage({
-              channel_id: rawId,
-              direction: "inbound",
-              author: event.from,
-              content: event.content,
-            })
-            .catch((err) => log.warn(`[ecs] inbound message callback failed: ${err}`));
-        }
       },
       { priority: 50 },
     );
@@ -621,39 +597,6 @@ const ecsPlugin = {
       },
       { priority: 50 },
     );
-
-    // Hook: forward outbound auto-reply messages to control plane.
-    api.on(
-      "message_sent",
-      async (event, ctx) => {
-        const rawId = extractRawId(ctx.conversationId);
-        if (!rawId || !event.success) {
-          return;
-        }
-        if (discord.isEcsChannel(rawId)) {
-          void callback
-            .reportMessage({
-              channel_id: rawId,
-              direction: "outbound",
-              content: event.content,
-            })
-            .catch((err) => log.warn(`[ecs] outbound message callback failed: ${err}`));
-        }
-      },
-      { priority: 50 },
-    );
-
-    // Wire ECS system posts (embeds) to control plane.
-    discord.setOnPost((info) => {
-      void callback
-        .reportMessage({
-          channel_id: info.channelId,
-          direction: "outbound",
-          embed_title: info.embedTitle,
-          content: info.content,
-        })
-        .catch((err) => log.warn(`[ecs] ecs-post callback failed: ${err}`));
-    });
 
     // Hook: gateway started — post a heartbeat.
     api.on(

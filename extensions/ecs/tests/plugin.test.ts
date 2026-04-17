@@ -117,19 +117,6 @@ describe("extractRawId (via message hooks)", () => {
     // No crash = prefix was stripped correctly.
   });
 
-  it("message_sent hook strips channel: prefix", async () => {
-    const { api, hooks } = createMockApi(makeEcsPluginConfig());
-    ecsPlugin.register(api);
-
-    const hook = hooks.find((h) => h.hookName === "message_sent");
-    expect(hook).toBeDefined();
-
-    await hook!.handler(
-      { content: "reply", success: true } as never,
-      { channelId: "discord", conversationId: "channel:ch-status" } as never,
-    );
-  });
-
   it("message_received handles raw IDs without prefix", async () => {
     const { api, hooks } = createMockApi(makeEcsPluginConfig());
     ecsPlugin.register(api);
@@ -220,13 +207,13 @@ describe("ECS plugin registration", () => {
     const { api, hooks, tools, httpRoutes } = createMockApi(makeEcsPluginConfig());
     ecsPlugin.register(api);
 
-    // Should register 6 hooks: subagent_ended, message_received, before_dispatch, message_sent, gateway_start, subagent_spawned
-    expect(hooks).toHaveLength(6);
+    // Should register 5 hooks: subagent_ended, message_received, before_dispatch, gateway_start, subagent_spawned.
+    // (The message_sent hook was removed along with the /agent_message_callback path — ECS never implemented that endpoint.)
+    expect(hooks).toHaveLength(5);
     expect(hooks.map((h) => h.hookName).toSorted()).toEqual([
       "before_dispatch",
       "gateway_start",
       "message_received",
-      "message_sent",
       "subagent_ended",
       "subagent_spawned",
     ]);

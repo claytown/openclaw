@@ -9,7 +9,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-export type EcsCallbackEvent = "started" | "completed" | "error" | "status" | "message";
+export type EcsCallbackEvent = "started" | "completed" | "error" | "status";
 
 export type EcsCallbackPayload = {
   agent_task_id: string;
@@ -131,19 +131,6 @@ export class EcsApiCallback {
 
   async report(payload: EcsCallbackPayload): Promise<{ ok: boolean; status?: number }> {
     return this.post("/agent_task_callback", payload);
-  }
-
-  async reportMessage(msg: {
-    channel_id: string;
-    direction: "inbound" | "outbound";
-    author?: string;
-    content?: string;
-    embed_title?: string;
-  }): Promise<{ ok: boolean; status?: number }> {
-    return this.post("/agent_message_callback", {
-      event: "message" as const,
-      ...msg,
-    });
   }
 
   async reportStarted(
