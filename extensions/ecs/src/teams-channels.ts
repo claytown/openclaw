@@ -394,6 +394,9 @@ export class EcsTeamsChannels {
     replyToId?: string,
   ): Promise<TeamsPostResult> {
     const serviceUrl = this.resolveServiceUrlFor(channelId);
+    console.log(
+      `[ecs-teams] post attempt: channelId=${channelId.slice(0, 30)}... replyToId=${replyToId ?? "<root>"} title=${title ?? "<none>"}`,
+    );
     try {
       const result = await botSend(this.creds, channelId, text, replyToId, serviceUrl);
       // Dynamically register any channel we successfully post to so

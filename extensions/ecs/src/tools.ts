@@ -171,6 +171,9 @@ export function createEcsStatusUpdateTool(deps: EcsToolDeps, ctx: EcsToolContext
               });
 
       const teamsThreadId = active?.teamsMessageId;
+      console.log(
+        `[ecs] status_update teams-target: teamsThreadId=${teamsThreadId ?? "<undef>"} activeHasTracker=${!!active} activeTeamsFlagDead=${active?.teamsThreadIsDead ?? "n/a"}`,
+      );
       const [discordResult] = await Promise.all([
         deps.discord.postStatusUpdate(update, projectId),
         deps.teams?.postStatusUpdate(update, projectId, teamsThreadId),

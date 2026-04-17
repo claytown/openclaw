@@ -139,38 +139,8 @@ export async function dispatchEcsTask(
     // even if the plugin registry resolves a separate instance.
     const active = deps.tracker.register(task, sessionKey, undefined, agentId);
 
-    let result: SubagentRunResult;
-    try {
-      result = await deps.subagent.run({
-        sessionKey,
-        message: prompt,
-        extraSystemPrompt,
-        deliver: false, // headless, no external delivery
-        idempotencyKey: task.idempotencyKey,
-      });
-    } catch (err) {
-      // Clean up orphaned tracker entry on spawn failure.
-      deps.tracker.remove(task.taskId);
-      throw err;
-    }
-
-    // Log a source-tagged registration line so prod can line up the ECS
-    // spawn with the core [subagent] session registered log emitted by
-    // setActiveEmbeddedRun. If they disagree on sessionKey shape, that is
-    // the canonicalization gap the forwarder trips on.
-    console.info(
-      `[subagent] session registered key=${sessionKey} id=${result.runId} source=ecs-dispatch`,
-    );
-
-    // Backfill runId now that we have it.
-    active.runId = result.runId;
-
-    // Activate persona for this session so the bootstrap hook can overlay files.
-    if (task.persona) {
-      setActivePersona(sessionKey, task.persona);
-    }
-
-    // Report started to ECS control plane.
+    // Report started to ECS control plane. Only needs taskId + sessionKey +
+    // agentId, all known before spawn.
     await deps.callback.reportStarted(task.taskId, sessionKey, agentId);
 
     // Echo task assignment to Discord.
@@ -192,7 +162,11 @@ export async function dispatchEcsTask(
     // can deep-link. This replaces the prior "reply to control-plane's
     // teamsThreadId" path, which reliably 404s when the control plane's
     // thread was minted at a different regional Bot Framework endpoint
-    // than our outbound creds.serviceUrl.
+    // than our outbound creds.serviceUrl. The post + index happens BEFORE
+    // subagent.run so the subagent's first tool call (the system prompt
+    // instructs "Call ecs_status_update with status running before you
+    // begin work") can resolve teamsMessageId from the tracker instead of
+    // reading undefined and posting as a new root.
     if (deps.teams) {
       let teamsResult = await deps.teams.postTaskAssigned(task, undefined, undefined);
       if (!teamsResult.messageId) {
@@ -220,6 +194,43 @@ export async function dispatchEcsTask(
         );
       }
     }
+
+    // Activate persona for this session so the bootstrap hook can overlay
+    // files on the first turn of the run. Must be set before subagent.run.
+    if (task.persona) {
+      setActivePersona(sessionKey, task.persona);
+    }
+
+    // Spawn the agent session LAST, once the tracker is fully populated
+    // with discordThreadId + teamsMessageId. The spawned session's first
+    // tool call will now see a fully-formed active entry.
+    let result: SubagentRunResult;
+    try {
+      result = await deps.subagent.run({
+        sessionKey,
+        message: prompt,
+        extraSystemPrompt,
+        deliver: false, // headless, no external delivery
+        idempotencyKey: task.idempotencyKey,
+      });
+    } catch (err) {
+      // Clean up orphaned tracker entry on spawn failure. The Discord/Teams
+      // roots we already posted are not rolled back — they're already
+      // visible to humans and the outer catch will reportError.
+      deps.tracker.remove(task.taskId);
+      throw err;
+    }
+
+    // Log a source-tagged registration line so prod can line up the ECS
+    // spawn with the core [subagent] session registered log emitted by
+    // setActiveEmbeddedRun. If they disagree on sessionKey shape, that is
+    // the canonicalization gap the forwarder trips on.
+    console.info(
+      `[subagent] session registered key=${sessionKey} id=${result.runId} source=ecs-dispatch`,
+    );
+
+    // Backfill runId now that we have it.
+    active.runId = result.runId;
 
     return {
       taskId: task.taskId,
