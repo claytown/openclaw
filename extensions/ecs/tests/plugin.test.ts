@@ -68,7 +68,6 @@ function createMockApi(pluginConfig: Record<string, unknown>): {
         run: vi.fn().mockResolvedValue({ runId: "run-1" }),
         waitForRun: vi.fn().mockResolvedValue({ status: "ok" }),
         queueMessage: vi.fn().mockResolvedValue({ queued: true }),
-        interrupt: vi.fn().mockResolvedValue({ interrupted: true }),
         getSessionMessages: vi.fn().mockResolvedValue({ messages: [] }),
         deleteSession: vi.fn(),
       },
@@ -243,36 +242,15 @@ describe("ECS plugin registration", () => {
     ]);
     expect(tools[0].optional).toBe(false);
 
-    // Should register 3 HTTP routes: the public /ecs API plus two
-    // loopback-only endpoints used by the before_dispatch forwarder.
-    //   - /__internal/ecs/inject            → attach a fresh run when no
-    //                                         streaming run exists.
-    //   - /__internal/ecs/session/interrupt → abort a stuck-in-tool-loop
-    //                                         run so queued messages
-    //                                         surface on the next run.
-    expect(httpRoutes).toHaveLength(3);
-    const publicRoute = httpRoutes.find((r: { path: string }) => r.path === "/ecs");
-    if (!publicRoute) {
-      throw new Error("public /ecs route not registered");
-    }
+    // Should register 1 HTTP route: the public /ecs API. The earlier
+    // loopback /__internal/ecs/* endpoints were removed; the forwarder
+    // now relies solely on subagent.queueMessage and logs the outcome
+    // once, no fallbacks.
+    expect(httpRoutes).toHaveLength(1);
+    const publicRoute = httpRoutes[0];
+    expect(publicRoute.path).toBe("/ecs");
     expect(publicRoute.match).toBe("prefix");
     expect(publicRoute.auth).toBe("gateway");
-    const injectRoute = httpRoutes.find(
-      (r: { path: string }) => r.path === "/__internal/ecs/inject",
-    );
-    if (!injectRoute) {
-      throw new Error("loopback inject route not registered");
-    }
-    expect(injectRoute.match).toBe("exact");
-    expect(injectRoute.auth).toBe("plugin");
-    const interruptRoute = httpRoutes.find(
-      (r: { path: string }) => r.path === "/__internal/ecs/session/interrupt",
-    );
-    if (!interruptRoute) {
-      throw new Error("loopback interrupt route not registered");
-    }
-    expect(interruptRoute.match).toBe("exact");
-    expect(interruptRoute.auth).toBe("plugin");
   });
 
   it("tool factory produces tools with session context", () => {

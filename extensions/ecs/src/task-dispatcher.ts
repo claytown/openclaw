@@ -133,6 +133,14 @@ export async function dispatchEcsTask(
       throw err;
     }
 
+    // Log a source-tagged registration line so prod can line up the ECS
+    // spawn with the core [subagent] session registered log emitted by
+    // setActiveEmbeddedRun. If they disagree on sessionKey shape, that is
+    // the canonicalization gap the forwarder trips on.
+    console.info(
+      `[subagent] session registered key=${sessionKey} id=${result.runId} source=ecs-dispatch`,
+    );
+
     // Backfill runId now that we have it.
     active.runId = result.runId;
 

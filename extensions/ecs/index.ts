@@ -6,7 +6,6 @@
  * back to an ECS control plane.
  */
 
-import { randomBytes } from "node:crypto";
 import { RequestClient } from "@buape/carbon";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/ecs";
 import { EcsApiCallback } from "./src/api-callback.js";
@@ -36,61 +35,6 @@ function extractRawId(conversationId: string | undefined): string | undefined {
   }
   const colonIdx = conversationId.indexOf(":");
   return colonIdx >= 0 ? conversationId.slice(colonIdx + 1) : conversationId;
-}
-
-/** Classify a remote address as loopback. Accepts IPv4 loopback (127/8),
- * IPv6 loopback (::1 in all its shapes), and IPv4-mapped IPv6
- * (::ffff:127.x.y.z) in the variants Node's `socket.remoteAddress` can
- * produce in containerized environments. The auth-token check is the
- * primary gate for these endpoints; this helper is defense-in-depth and
- * the returned reason feeds the rejection log so prod misconfig is easy
- * to diagnose. */
-function classifyLoopbackReject(req: {
-  socket?: { remoteAddress?: string | undefined };
-  headers: Record<string, string | string[] | undefined>;
-}): { ok: true } | { ok: false; reason: string } {
-  const addr = (req.socket?.remoteAddress ?? "").toLowerCase();
-  if (!addr) {
-    return { ok: false, reason: "missing remoteAddress" };
-  }
-  const stripped = addr.startsWith("::ffff:") ? addr.slice("::ffff:".length) : addr;
-  const isLoopbackAddr =
-    stripped === "::1" ||
-    stripped === "0:0:0:0:0:0:0:1" ||
-    stripped.startsWith("127.") ||
-    stripped === "localhost";
-  if (!isLoopbackAddr) {
-    return { ok: false, reason: `non-loopback remoteAddress=${addr}` };
-  }
-  const forwardedHeaders = ["x-forwarded-for", "forwarded", "x-real-ip"] as const;
-  for (const h of forwardedHeaders) {
-    if (req.headers[h]) {
-      return { ok: false, reason: `forwarded header present: ${h}` };
-    }
-  }
-  return { ok: true };
-}
-
-/** Read a JSON request body with a small hard size cap. */
-async function readJsonBody(
-  req: import("node:http").IncomingMessage,
-  maxBytes = 64 * 1024,
-): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const chunk of req) {
-    const buf = typeof chunk === "string" ? Buffer.from(chunk) : (chunk as Buffer);
-    total += buf.length;
-    if (total > maxBytes) {
-      throw new Error(`body exceeds ${maxBytes} bytes`);
-    }
-    chunks.push(buf);
-  }
-  const text = Buffer.concat(chunks).toString("utf8");
-  if (!text) {
-    return {};
-  }
-  return JSON.parse(text);
 }
 
 /** Normalize a Discord bot token (strip env-var prefix, trim whitespace). */
@@ -388,172 +332,6 @@ const ecsPlugin = {
       },
     });
 
-    // --- Loopback-only inject endpoint ---
-    //
-    // Used by the before_dispatch forwarder when a human reply lands but the
-    // target agent session is not currently streaming. The forwarder POSTs
-    // through the loopback gateway so this handler runs with a legitimate
-    // gateway request context and subagent.run() can attach a fresh run.
-    // Calling subagent.run() directly from inside a hook on the same stack
-    // that received the inbound message deadlocks on the session write lock
-    // for coding sessions that were previously woken up this way.
-    let injectPort = 0;
-    const injectAuthToken = randomBytes(32).toString("hex");
-
-    api.registerHttpRoute({
-      path: "/__internal/ecs/inject",
-      match: "exact",
-      auth: "plugin",
-      handler: async (req, res) => {
-        if (req.method !== "POST") {
-          res.statusCode = 405;
-          res.end();
-          return true;
-        }
-        const loopback = classifyLoopbackReject(req);
-        if (!loopback.ok) {
-          log.warn(
-            `[gateway] __internal/ecs/inject rejected reason=${loopback.reason} remoteAddress=${req.socket?.remoteAddress ?? "<none>"}`,
-          );
-          res.statusCode = 403;
-          res.end(JSON.stringify({ error: loopback.reason }));
-          return true;
-        }
-        let body: unknown;
-        try {
-          body = await readJsonBody(req);
-        } catch (err) {
-          res.statusCode = 400;
-          res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
-          return true;
-        }
-        if (
-          typeof body !== "object" ||
-          body === null ||
-          typeof (body as Record<string, unknown>).sessionKey !== "string" ||
-          typeof (body as Record<string, unknown>).content !== "string" ||
-          typeof (body as Record<string, unknown>).authToken !== "string" ||
-          (body as Record<string, unknown>).role !== "user"
-        ) {
-          res.statusCode = 400;
-          res.end(JSON.stringify({ error: "invalid body shape" }));
-          return true;
-        }
-        const { sessionKey, content, authToken } = body as {
-          sessionKey: string;
-          content: string;
-          authToken: string;
-        };
-        if (authToken !== injectAuthToken) {
-          log.warn(
-            `[gateway] __internal/ecs/inject rejected reason=bad-authToken sessionKey=${sessionKey} tokenLen=${authToken.length}`,
-          );
-          res.statusCode = 403;
-          res.end(JSON.stringify({ error: "bad authToken" }));
-          return true;
-        }
-
-        // Fire-and-forget: subagent.run acquires the session write lock and
-        // can block for the duration of a turn. Resolving the HTTP response
-        // first prevents the caller (the before_dispatch hook) from tying up
-        // its own stack on this round-trip.
-        res.statusCode = 202;
-        res.end(JSON.stringify({ accepted: true }));
-
-        void (async () => {
-          try {
-            const runResult = await api.runtime.subagent.run({
-              sessionKey,
-              message: content,
-              deliver: false,
-            });
-            log.info(
-              `[ecs] inject: run attached sessionKey=${sessionKey} runId=${runResult.runId}`,
-            );
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            log.warn(`[ecs] inject: run failed sessionKey=${sessionKey}: ${msg}`);
-          }
-        })();
-
-        return true;
-      },
-    });
-
-    // Sibling loopback endpoint that cancels the active run for a session.
-    // The before_dispatch forwarder uses this as a second step after a
-    // successful queueMessage: for coding-ecs-* sessions whose tool loop
-    // doesn't poll the pending-message queue between tool calls, the queued
-    // message alone never reaches the LLM. Aborting the current run lands
-    // at the next safe boundary (after the current tool call completes) so
-    // the session yields and the next run sees the queued message.
-    api.registerHttpRoute({
-      path: "/__internal/ecs/session/interrupt",
-      match: "exact",
-      auth: "plugin",
-      handler: async (req, res) => {
-        if (req.method !== "POST") {
-          res.statusCode = 405;
-          res.end();
-          return true;
-        }
-        const loopback = classifyLoopbackReject(req);
-        if (!loopback.ok) {
-          log.warn(
-            `[gateway] __internal/ecs/session/interrupt rejected reason=${loopback.reason} remoteAddress=${req.socket?.remoteAddress ?? "<none>"}`,
-          );
-          res.statusCode = 403;
-          res.end(JSON.stringify({ error: loopback.reason }));
-          return true;
-        }
-        let body: unknown;
-        try {
-          body = await readJsonBody(req);
-        } catch (err) {
-          res.statusCode = 400;
-          res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
-          return true;
-        }
-        if (
-          typeof body !== "object" ||
-          body === null ||
-          typeof (body as Record<string, unknown>).sessionKey !== "string" ||
-          typeof (body as Record<string, unknown>).authToken !== "string"
-        ) {
-          res.statusCode = 400;
-          res.end(JSON.stringify({ error: "invalid body shape" }));
-          return true;
-        }
-        const { sessionKey, authToken } = body as {
-          sessionKey: string;
-          authToken: string;
-        };
-        if (authToken !== injectAuthToken) {
-          log.warn(
-            `[gateway] __internal/ecs/session/interrupt rejected reason=bad-authToken sessionKey=${sessionKey} tokenLen=${authToken.length}`,
-          );
-          res.statusCode = 403;
-          res.end(JSON.stringify({ error: "bad authToken" }));
-          return true;
-        }
-
-        try {
-          const result = await api.runtime.subagent.interrupt({ sessionKey });
-          const status = result.interrupted ? "ok" : "noop";
-          log.info(`[ecs] interrupt: sessionKey=${sessionKey} status=${status}`);
-          res.statusCode = 200;
-          res.end(JSON.stringify({ status, interrupted: result.interrupted }));
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          log.warn(`[ecs] interrupt: sessionKey=${sessionKey} status=err err=${msg}`);
-          res.statusCode = 500;
-          res.end(JSON.stringify({ status: "err", error: msg }));
-        }
-
-        return true;
-      },
-    });
-
     // --- Tools ---
     const toolDeps: EcsToolDeps = { tracker, discord, teams, callback, questionRelay };
 
@@ -623,6 +401,13 @@ const ecsPlugin = {
         tracker.remove(taskId);
         clearActivePersona(sessionKey);
         log.info(`[ecs] task ${taskId} ended: ${event.outcome ?? "unknown"}`);
+        // Source-tagged end log, symmetric with [subagent] session
+        // registered source=ecs-dispatch emitted by task-dispatcher on
+        // spawn. Pair is enough to scan prod logs for ECS session
+        // lifecycle even when other subagent runs interleave.
+        console.info(
+          `[subagent] session unregistered key=${sessionKey} id=${active.runId ?? "<unknown>"} source=ecs-dispatch outcome=${event.outcome ?? "unknown"}`,
+        );
       },
       { priority: 100 },
     );
@@ -750,109 +535,31 @@ const ecsPlugin = {
           );
           const msg = `[Teams thread reply from ${sender}]\n${event.content}\n\nIMPORTANT: Use the ecs_thread_reply tool to respond to this message. The human is waiting for a reply in the task thread.`;
 
-          // Prefer queueing into the active run so the next LLM turn picks up
-          // the reply. When there is no active streaming run, POST to the
-          // loopback /__internal/ecs/inject endpoint instead of calling
-          // subagent.run() on this same stack: the hook is inside the gateway
-          // dispatch path and subagent.run() contends on the session write
-          // lock for coding-ecs-* sessions we previously woke up the same
-          // way. The loopback handler is the boundary that detaches this
-          // stack from the fresh run.
+          // Forward the human's reply into the active run's pending-message
+          // queue. queueMessage resolves against the shared pi-embedded-run
+          // map (populated by any setActiveEmbeddedRun call), so a returned
+          // queued:false + reason=no_active_run means the agent session is
+          // genuinely idle — not a routing gap. Log the outcome and stop.
+          // No fallback layers: earlier attempts at HTTP inject /
+          // subagent.run / interrupt added surface without fixing routing,
+          // and the registry mismatch is the real bug to chase.
           void (async () => {
             const rawKey = activeTask.sessionKey;
             try {
-              const canonicalGuess = `agent:main:${rawKey}`;
-              log.info(
-                `[ecs] queueMessage attempt sessionKey=${rawKey} canonicalGuess=${canonicalGuess}`,
-              );
               const outcome = await api.runtime.subagent.queueMessage({
                 sessionKey: rawKey,
                 message: msg,
               });
               if (outcome.queued) {
                 log.info(`[ecs] forward: method=bus sessionKey=${rawKey} status=ok`);
-                // The pending-message queue is only consumed at LLM turn
-                // boundaries. Coding agents in a long tool loop (tests,
-                // builds, commits) never reach that boundary on their own,
-                // so the queued message rots. Interrupt the current run so
-                // it yields at the next safe tool boundary; accumulated
-                // queue messages surface on the next run.
-                if (injectPort > 0) {
-                  try {
-                    const url = `http://127.0.0.1:${injectPort}/__internal/ecs/session/interrupt`;
-                    log.info(
-                      `[ecs] loopback interrupt to=${url} auth=authToken(len=${injectAuthToken.length}) sessionKey=${rawKey}`,
-                    );
-                    const resp = await fetch(url, {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({
-                        sessionKey: rawKey,
-                        authToken: injectAuthToken,
-                      }),
-                      signal: AbortSignal.timeout(5_000),
-                    });
-                    let respBody = "";
-                    try {
-                      respBody = (await resp.text()).slice(0, 200);
-                    } catch {
-                      // Ignore body-read errors — status code is enough.
-                    }
-                    log.info(
-                      `[ecs] interrupt after bus: sessionKey=${rawKey} status=${resp.status} body=${respBody}`,
-                    );
-                  } catch (intErr) {
-                    const intMsg = intErr instanceof Error ? intErr.message : String(intErr);
-                    log.warn(
-                      `[ecs] interrupt after bus: sessionKey=${rawKey} status=err err=${intMsg}`,
-                    );
-                  }
-                }
                 return;
               }
               log.info(
-                `[ecs] subagent.queueMessage not queued (reason=${outcome.reason ?? "unknown"}) sessionKey=${rawKey} canonicalGuess=${canonicalGuess} trackerSize=${tracker.size()}; falling back to loopback inject`,
+                `[ecs] forward: method=bus sessionKey=${rawKey} status=no_active_run reason=${outcome.reason ?? "unknown"} — message discarded (task not actively running)`,
               );
-              if (injectPort <= 0) {
-                log.warn(
-                  `[ecs] forward: method=http sessionKey=${rawKey} status=err (gateway port not yet captured)`,
-                );
-                return;
-              }
-              try {
-                const url = `http://127.0.0.1:${injectPort}/__internal/ecs/inject`;
-                log.info(
-                  `[ecs] loopback inject to=${url} auth=authToken(len=${injectAuthToken.length}) sessionKey=${rawKey}`,
-                );
-                const resp = await fetch(url, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    sessionKey: rawKey,
-                    role: "user",
-                    content: msg,
-                    authToken: injectAuthToken,
-                  }),
-                  signal: AbortSignal.timeout(5_000),
-                });
-                let respBody = "";
-                try {
-                  respBody = (await resp.text()).slice(0, 200);
-                } catch {
-                  // Ignore body-read errors — status code is enough.
-                }
-                log.info(
-                  `[ecs] forward: method=http sessionKey=${rawKey} status=${resp.status} body=${respBody}`,
-                );
-              } catch (httpErr) {
-                const httpMsg = httpErr instanceof Error ? httpErr.message : String(httpErr);
-                log.warn(
-                  `[ecs] forward: method=http sessionKey=${rawKey} status=err err=${httpMsg}`,
-                );
-              }
             } catch (err) {
               const errMsg = err instanceof Error ? err.message : String(err);
-              log.warn(`[ecs] forward failed via queueMessage sessionKey=${rawKey}: ${errMsg}`);
+              log.warn(`[ecs] forward: method=bus sessionKey=${rawKey} status=err err=${errMsg}`);
             }
           })();
 
@@ -911,15 +618,10 @@ const ecsPlugin = {
         .catch((err) => log.warn(`[ecs] ecs-post callback failed: ${err}`));
     });
 
-    // Hook: gateway started — post a heartbeat. Also captures the gateway
-    // HTTP port so the forwarder can POST to /__internal/ecs/inject over
-    // loopback when an active session is not streaming.
+    // Hook: gateway started — post a heartbeat.
     api.on(
       "gateway_start",
       async (event) => {
-        if (typeof event.port === "number" && event.port > 0) {
-          injectPort = event.port;
-        }
         const sysEvent = {
           title: "Gateway Online",
           description: `Gateway started on port ${event.port}.`,

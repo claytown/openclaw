@@ -1116,8 +1116,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
             withPluginRuntimePluginIdScope(pluginId, () => subagent.waitForRun(params)),
           queueMessage: (params) =>
             withPluginRuntimePluginIdScope(pluginId, () => subagent.queueMessage(params)),
-          interrupt: (params) =>
-            withPluginRuntimePluginIdScope(pluginId, () => subagent.interrupt(params)),
           getSessionMessages: (params) =>
             withPluginRuntimePluginIdScope(pluginId, () => subagent.getSessionMessages(params)),
           getSession: (params) =>
