@@ -384,6 +384,45 @@ export function createEcsThreadReplyTool(deps: EcsToolDeps, ctx: EcsToolContext)
   };
 }
 
+// --- ecs_check_inbox ---
+
+const EcsCheckInboxSchema = Type.Object({
+  taskId: Type.Optional(
+    Type.String({
+      description:
+        "ECS task ID. Auto-resolved from session when available; pass explicitly as fallback.",
+    }),
+  ),
+});
+
+export function createEcsCheckInboxTool(deps: EcsToolDeps, ctx: EcsToolContext): AnyAgentTool {
+  return {
+    label: "ECS",
+    name: "ecs_check_inbox",
+    description:
+      "Check the inbox for any human messages sent to this task's Teams thread. " +
+      "Returns an array of pending messages [{id, sender, content, ts}] or [] if empty. " +
+      "Atomically clears the inbox on read, so each message is delivered exactly once. " +
+      "Call this at natural milestone boundaries (after verifying a build, between " +
+      "acceptance-criteria items, before starting a new file, before declaring task " +
+      "completion). If messages are returned, acknowledge each using ecs_thread_reply " +
+      "before continuing work. Don't abandon the current task unless the user explicitly " +
+      "requests it.",
+    parameters: EcsCheckInboxSchema,
+    execute: async (_toolCallId, args) => {
+      const params = args as Record<string, unknown>;
+      const active = ctx.sessionKey ? deps.tracker.getBySessionKey(ctx.sessionKey) : undefined;
+      const paramTaskId = readStringParam(params, "taskId");
+      const taskId = active?.task.taskId ?? paramTaskId;
+      if (!taskId) {
+        return jsonResult({ messages: [] });
+      }
+      const { messages } = await deps.callback.checkInbox(taskId);
+      return jsonResult({ messages });
+    },
+  };
+}
+
 // --- ecs_set_persona ---
 
 const EcsSetPersonaSchema = Type.Object({

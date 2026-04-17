@@ -260,4 +260,78 @@ export class EcsApiCallback {
       event: "question_asked",
     });
   }
+
+  /**
+   * Persist a forwarded Teams thread reply so it survives even if the
+   * in-memory subagent bus never drains it (idle session, between turns,
+   * etc.). Paired with checkInbox on the agent side for belt-and-suspenders
+   * delivery: every message flows through queueMessage AND lands here.
+   */
+  async reportUserMessageQueued(payload: {
+    agent_task_id: string;
+    message_id: string;
+    sender: string;
+    content: string;
+    teams_thread_id: string;
+  }): Promise<{ ok: boolean; status?: number }> {
+    return this.post("/agent_task_callback", {
+      ...payload,
+      event: "user_message_queued",
+    });
+  }
+
+  /**
+   * Atomically drain pending_user_messages for a task. Returns {messages:
+   * []} on any transport/parse failure so the agent tool call degrades
+   * quietly rather than throwing mid-turn.
+   */
+  async checkInbox(agentTaskId: string): Promise<{
+    messages: Array<{ id: string; sender: string; content: string; ts: string }>;
+  }> {
+    if (!this.baseUrl) {
+      return { messages: [] };
+    }
+    const url = `${this.baseUrl}/check_agent_inbox`;
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    };
+    if (this.apiKey) {
+      headers["Authorization"] = `Bearer ${this.apiKey}`;
+    }
+    try {
+      const resp = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ agent_task_id: agentTaskId }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!resp.ok) {
+        console.warn(`[ecs] checkInbox ${url} returned ${resp.status}`);
+        return { messages: [] };
+      }
+      const parsed = (await resp.json()) as unknown;
+      // Accept { messages: [...] } or a bare array so the control-plane
+      // implementer has some flexibility.
+      const raw = Array.isArray(parsed)
+        ? parsed
+        : isRecord(parsed) && Array.isArray(parsed.messages)
+          ? parsed.messages
+          : [];
+      const pickString = (v: unknown, fallback: string): string =>
+        typeof v === "string" ? v : fallback;
+      const messages = raw
+        .filter((x: unknown): x is Record<string, unknown> => isRecord(x))
+        .map((m) => ({
+          id: pickString(m.id, ""),
+          sender: pickString(m.sender, "unknown"),
+          content: pickString(m.content, ""),
+          ts: pickString(m.ts, ""),
+        }));
+      return { messages };
+    } catch (err) {
+      console.warn(`[ecs] checkInbox ${url} failed:`, err instanceof Error ? err.message : err);
+      return { messages: [] };
+    }
+  }
 }

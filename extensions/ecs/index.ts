@@ -21,6 +21,7 @@ import { EcsTeamsChannels } from "./src/teams-channels.js";
 import { TeamsProjectChannelManager } from "./src/teams-project-channel-manager.js";
 import {
   createEcsAskQuestionTool,
+  createEcsCheckInboxTool,
   createEcsRaiseIssueTool,
   createEcsSetPersonaTool,
   createEcsStatusUpdateTool,
@@ -342,6 +343,7 @@ const ecsPlugin = {
         createEcsRaiseIssueTool(toolDeps, { sessionKey: ctx.sessionKey, agentId: ctx.agentId }),
         createEcsSetPersonaTool(toolDeps, { sessionKey: ctx.sessionKey, agentId: ctx.agentId }),
         createEcsThreadReplyTool(toolDeps, { sessionKey: ctx.sessionKey, agentId: ctx.agentId }),
+        createEcsCheckInboxTool(toolDeps, { sessionKey: ctx.sessionKey, agentId: ctx.agentId }),
       ],
       {
         names: [
@@ -350,6 +352,7 @@ const ecsPlugin = {
           "ecs_raise_issue",
           "ecs_set_persona",
           "ecs_thread_reply",
+          "ecs_check_inbox",
         ],
         optional: false,
       },
@@ -530,10 +533,44 @@ const ecsPlugin = {
         const activeTask = activeMatch;
         if (activeTask) {
           const sender = event.senderId ?? ctx.senderId ?? "unknown";
+          // Generate a stable id shared by the bus-drop and the durable
+          // inbox callback. The agent matches this id against anything
+          // ecs_check_inbox returns to dedup duplicate deliveries.
+          const messageId = crypto.randomUUID();
           log.info(
-            `[ecs] forwarding thread reply to agent session ${activeTask.sessionKey} (task ${activeTask.task.taskId}, from ${sender})`,
+            `[ecs] forwarding thread reply to agent session ${activeTask.sessionKey} (task ${activeTask.task.taskId}, from ${sender}, messageId=${messageId})`,
           );
-          const msg = `[Teams thread reply from ${sender}]\n${event.content}\n\nIMPORTANT: Use the ecs_thread_reply tool to respond to this message. The human is waiting for a reply in the task thread.`;
+          const msg =
+            `[Teams thread reply from ${sender}]\n${event.content}\n\n` +
+            `IMPORTANT: Use the ecs_thread_reply tool to respond to this message. ` +
+            `The human is waiting for a reply in the task thread.\n\n` +
+            `[message_id=${messageId}]`;
+
+          // Persist the message in ECS so it survives the bus being idle
+          // (queueMessage returning no_active_run). Fire-and-forget — paired
+          // with the bus-drop below, both using the same messageId so the
+          // agent can dedup via ecs_check_inbox.
+          void (async () => {
+            try {
+              const res = await callback.reportUserMessageQueued({
+                agent_task_id: activeTask.task.taskId,
+                message_id: messageId,
+                sender,
+                content: event.content,
+                teams_thread_id: activeTask.teamsMessageId ?? "",
+              });
+              if (!res.ok) {
+                log.warn(
+                  `[ecs] persist: messageId=${messageId} taskId=${activeTask.task.taskId} status=err (callback rejected)`,
+                );
+              }
+            } catch (err) {
+              const errMsg = err instanceof Error ? err.message : String(err);
+              log.warn(
+                `[ecs] persist: messageId=${messageId} taskId=${activeTask.task.taskId} status=err err=${errMsg}`,
+              );
+            }
+          })();
 
           // Forward the human's reply into the active run's pending-message
           // queue. queueMessage resolves against the shared pi-embedded-run

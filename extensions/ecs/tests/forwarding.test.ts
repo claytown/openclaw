@@ -158,38 +158,76 @@ describe("ECS before_dispatch forwarding", () => {
   });
 
   it("calls subagent.queueMessage first and posts a Teams ACK when tracker matches", async () => {
-    const { api, hooks, queueMessage, run } = createApi(makeConfig());
+    const cfg = makeConfig();
+    cfg.controlPlane = { url: "https://cp.example", apiKey: "sek" };
+    const { api, hooks, queueMessage, run } = createApi(cfg);
     queueMessage.mockResolvedValue({ queued: true });
 
-    ecsPlugin.register(api);
-    const hook = hooks.find((h) => h.hookName === "before_dispatch");
-    expect(hook).toBeDefined();
-
-    const result = await hook!.handler(
-      { content: "what are you doing?", senderId: "human@example.com" } as never,
-      { sessionKey: `agent:main:msteams:default:thread:${threadId}` } as never,
-    );
-    expect(result).toEqual({ handled: true });
-
-    // Allow the fire-and-forget queueMessage/run chain to settle.
-    await new Promise((r) => setImmediate(r));
-
-    expect(queueMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey,
-        message: expect.stringContaining("what are you doing?"),
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
       }),
     );
-    expect(run).not.toHaveBeenCalled();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    const teamsMocks = (await import("../src/teams-channels.js")) as unknown as {
-      __mocks: { postReplyToThread: ReturnType<typeof vi.fn> };
-    };
-    expect(teamsMocks.__mocks.postReplyToThread).toHaveBeenCalledWith(
-      expect.stringContaining("Got it"),
-      "proj-1",
-      threadId,
-    );
+    try {
+      ecsPlugin.register(api);
+      const hook = hooks.find((h) => h.hookName === "before_dispatch");
+      expect(hook).toBeDefined();
+
+      const result = await hook!.handler(
+        { content: "what are you doing?", senderId: "human@example.com" } as never,
+        { sessionKey: `agent:main:msteams:default:thread:${threadId}` } as never,
+      );
+      expect(result).toEqual({ handled: true });
+
+      // Allow the fire-and-forget queueMessage/run chain to settle.
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+
+      // Bus-drop carries the full text plus a stable [message_id=<uuid>]
+      // marker so the agent can dedup against ecs_check_inbox responses.
+      expect(queueMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey,
+          message: expect.stringMatching(/\[message_id=[0-9a-f-]{36}\]/),
+        }),
+      );
+      const queuedMsg = queueMessage.mock.calls[0]?.[0]?.message as string;
+      expect(queuedMsg).toContain("what are you doing?");
+      const messageIdMatch = queuedMsg.match(/\[message_id=([0-9a-f-]{36})\]/);
+      expect(messageIdMatch).not.toBeNull();
+
+      expect(run).not.toHaveBeenCalled();
+
+      // Durable persistence posted alongside the bus-drop with the same id.
+      const persistCall = fetchMock.mock.calls.find(
+        (call: unknown[]) => call[0] === "https://cp.example/agent_task_callback",
+      ) as [string, RequestInit] | undefined;
+      expect(persistCall).toBeDefined();
+      const persistBody = JSON.parse(persistCall![1].body as string);
+      expect(persistBody).toMatchObject({
+        event: "user_message_queued",
+        agent_task_id: taskId,
+        message_id: messageIdMatch![1],
+        sender: "human@example.com",
+        content: "what are you doing?",
+        teams_thread_id: threadId,
+      });
+
+      const teamsMocks = (await import("../src/teams-channels.js")) as unknown as {
+        __mocks: { postReplyToThread: ReturnType<typeof vi.fn> };
+      };
+      expect(teamsMocks.__mocks.postReplyToThread).toHaveBeenCalledWith(
+        expect.stringContaining("Got it"),
+        "proj-1",
+        threadId,
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("logs and drops the reply when queueMessage reports no active run (no fallbacks)", async () => {

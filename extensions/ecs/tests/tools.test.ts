@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { EcsTaskTracker } from "../src/task-tracker.js";
 import {
   createEcsAskQuestionTool,
+  createEcsCheckInboxTool,
   createEcsRaiseIssueTool,
   createEcsStatusUpdateTool,
   createEcsThreadReplyTool,
@@ -20,6 +21,8 @@ const mocks = {
   reportCompleted: vi.fn().mockResolvedValue({ ok: true }),
   reportError: vi.fn().mockResolvedValue({ ok: true }),
   reportQuestion: vi.fn().mockResolvedValue({ ok: true }),
+  reportUserMessageQueued: vi.fn().mockResolvedValue({ ok: true }),
+  checkInbox: vi.fn().mockResolvedValue({ messages: [] }),
   registerPendingQuestion: vi.fn().mockResolvedValue({
     answer: "42",
     answeredBy: "human",
@@ -48,6 +51,8 @@ function makeDeps(tracker?: EcsTaskTracker): EcsToolDeps {
       reportCompleted: mocks.reportCompleted,
       reportError: mocks.reportError,
       reportQuestion: mocks.reportQuestion,
+      reportUserMessageQueued: mocks.reportUserMessageQueued,
+      checkInbox: mocks.checkInbox,
     } as never,
     questionRelay: {
       registerPendingQuestion: mocks.registerPendingQuestion,
@@ -350,5 +355,46 @@ describe("ecs_thread_reply", () => {
     expect(parsed.discordMessageId).toBeNull();
     expect(parsed.teamsMessageId).toBeNull();
     expect(mocks.postToThread).not.toHaveBeenCalled();
+  });
+});
+
+describe("ecs_check_inbox", () => {
+  it("resolves taskId from session and forwards to callback.checkInbox", async () => {
+    const tracker = new EcsTaskTracker();
+    tracker.register(makeTask(), "sess-1", undefined, "agent-1");
+    const deps = makeDeps(tracker);
+    mocks.checkInbox.mockResolvedValueOnce({
+      messages: [{ id: "m-1", sender: "alice", content: "ping", ts: "2026-04-17T00:00:00Z" }],
+    });
+
+    const tool = createEcsCheckInboxTool(deps, { sessionKey: "sess-1", agentId: "agent-1" });
+    const result = await tool.execute("call-1", {});
+
+    const parsed = parseResult(result as never) as { messages: Array<Record<string, unknown>> };
+    expect(mocks.checkInbox).toHaveBeenCalledWith("task-1");
+    expect(parsed.messages).toEqual([
+      { id: "m-1", sender: "alice", content: "ping", ts: "2026-04-17T00:00:00Z" },
+    ]);
+  });
+
+  it("returns empty array when no task resolves from session or args", async () => {
+    const deps = makeDeps();
+    const tool = createEcsCheckInboxTool(deps, { sessionKey: "no-task" });
+
+    const result = await tool.execute("call-1", {});
+
+    const parsed = parseResult(result as never) as { messages: unknown[] };
+    expect(parsed.messages).toEqual([]);
+    expect(mocks.checkInbox).not.toHaveBeenCalled();
+  });
+
+  it("falls back to taskId arg when session does not match", async () => {
+    const deps = makeDeps();
+    mocks.checkInbox.mockResolvedValueOnce({ messages: [] });
+
+    const tool = createEcsCheckInboxTool(deps, { sessionKey: "no-task" });
+    await tool.execute("call-1", { taskId: "task-42" });
+
+    expect(mocks.checkInbox).toHaveBeenCalledWith("task-42");
   });
 });
